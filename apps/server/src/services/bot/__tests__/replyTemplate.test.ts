@@ -10,6 +10,7 @@ import {
   renderErrorWithDetails,
   renderFinalReply,
   renderGroupRejected,
+  renderGuestCopy,
   renderInlineError,
   renderLLMGenerating,
   renderSenderRejected,
@@ -715,6 +716,31 @@ describe('replyTemplate', () => {
       expect(renderCommandReply('cmdStopNotActive', 'zh-CN')).toContain('没有正在执行');
       expect(renderCommandReply('cmdStopRequested', 'zh-CN')).toBe('已发出停止请求。');
       expect(renderCommandReply('cmdStopUnable', 'zh-CN')).toContain('无法停止');
+    });
+  });
+
+  // ==================== renderGuestCopy ====================
+
+  describe('renderGuestCopy', () => {
+    it('returns the English Guest Mode copy by default', () => {
+      expect(renderGuestCopy('guestMediaUnavailable')).toBe(
+        'This attachment can’t be delivered in Telegram Guest Mode.',
+      );
+      expect(renderGuestCopy('guestTextTruncated')).toContain('4096');
+      expect(renderGuestCopy('guestLinkPromptDm')).toContain('send /start');
+    });
+
+    it('returns the Chinese Guest Mode copy when locale is zh-CN', () => {
+      expect(renderGuestCopy('guestMediaUnavailable', 'zh-CN')).toBe(
+        '该附件无法通过 Telegram 访客模式送达。',
+      );
+      expect(renderGuestCopy('guestTextTruncated', 'zh-CN')).toContain('4096');
+      expect(renderGuestCopy('guestLinkPromptDm', 'zh-CN')).toContain('/start');
+      expect(renderGuestCopy('guestLinkButton', 'zh-CN')).toBe('打开机器人');
+    });
+
+    it('falls back to English for locales without a Guest Mode dictionary', () => {
+      expect(renderGuestCopy('guestLinkButton', 'fr-FR')).toBe('Open Bot');
     });
   });
 

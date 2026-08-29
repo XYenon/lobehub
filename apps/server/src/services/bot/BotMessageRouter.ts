@@ -1,6 +1,7 @@
 import { createIoRedisState } from '@chat-adapter/state-ioredis';
 import { DEFAULT_BOT_DEBOUNCE_MS } from '@lobechat/const';
-import { Chat, ConsoleLogger, type Message, type MessageContext } from 'chat';
+import type { Message, MessageContext, WebhookOptions } from 'chat';
+import { Chat, ConsoleLogger } from 'chat';
 import debug from 'debug';
 
 import { getBotFeatureAccessState } from '@/business/server/bot/featureAccess';
@@ -51,6 +52,7 @@ import {
   type UserAllowlist,
   type WatchKeywordEntry,
 } from './platforms';
+import { isGuestTelegramThreadId } from './platforms/telegram/threadId';
 import {
   renderApproveSuccess,
   renderCommandReply,
@@ -203,8 +205,11 @@ export class BotMessageRouter {
    * Get the webhook handler for a given platform + appId.
    * Returns a function compatible with Next.js Route Handler: `(req: Request) => Promise<Response>`
    */
-  getWebhookHandler(platform: string, appId?: string): (req: Request) => Promise<Response> {
-    return async (req: Request) => {
+  getWebhookHandler(
+    platform: string,
+    appId?: string,
+  ): (req: Request, options?: WebhookOptions) => Promise<Response> {
+    return async (req: Request, options?: WebhookOptions) => {
       const entry = platformRegistry.getPlatform(platform);
       if (!entry) {
         return new Response('No bot configured for this platform', { status: 404 });
@@ -214,7 +219,7 @@ export class BotMessageRouter {
         return new Response(`Missing appId for ${platform} webhook`, { status: 400 });
       }
 
-      return this.handleWebhook(req, platform, appId);
+      return this.handleWebhook(req, platform, appId, options);
     };
   }
 
@@ -235,7 +240,12 @@ export class BotMessageRouter {
   // Webhook handling
   // ------------------------------------------------------------------
 
-  private async handleWebhook(req: Request, platform: string, appId: string): Promise<Response> {
+  private async handleWebhook(
+    req: Request,
+    platform: string,
+    appId: string,
+    options?: WebhookOptions,
+  ): Promise<Response> {
     log('handleWebhook: platform=%s, appId=%s', platform, appId);
 
     const bot = await this.getOrCreateBot(platform, appId);
@@ -244,7 +254,7 @@ export class BotMessageRouter {
     }
 
     if (bot.chatBot.webhooks && platform in bot.chatBot.webhooks) {
-      return (bot.chatBot.webhooks as any)[platform](req);
+      return (bot.chatBot.webhooks as any)[platform](req, options);
     }
 
     return new Response(`No bot configured for ${platform}`, { status: 404 });
@@ -679,8 +689,12 @@ export class BotMessageRouter {
      * not the parent operators pasted. `extraGroupAllowlistChannels`
      * surfaces the parent so either ID lets the message through.
      */
-    const passesGroupPolicy = (thread: { id: string; isDM?: boolean }): boolean =>
-      shouldHandleGroup({
+    const passesGroupPolicy = (thread: { id: string; isDM?: boolean }): boolean => {
+      // Guest Mode summons are opt-in per message (@mention or reply) in a
+      // chat the bot is not a member of. Group allowlists / disable exist to
+      // bound chats the bot *joined*; they do not apply to guest queries.
+      if (platform === 'telegram' && isGuestTelegramThreadId(thread.id)) return true;
+      return shouldHandleGroup({
         candidateChannelIds: [
           client.extractChatId(thread.id),
           ...(client.extraGroupAllowlistChannels?.(thread.id) ?? []),
@@ -688,6 +702,7 @@ export class BotMessageRouter {
         groupSettings,
         isDM: thread.isDM === true,
       });
+    };
 
     /**
      * Handle a sender that the global `allowFrom` rejected. Posts the
