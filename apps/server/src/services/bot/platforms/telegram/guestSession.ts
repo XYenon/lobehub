@@ -22,6 +22,12 @@ export interface TelegramGuestSession {
    */
   locale?: BotReplyLocale;
   /**
+   * Kind of the current inline message after a successful `editMessageMedia`.
+   * Telegram cannot convert a photo back into a text message, so later
+   * text-only edits must use `editMessageCaption` instead of `editMessageText`.
+   */
+  mediaType?: 'photo';
+  /**
    * Write timestamp (ms). Used to pick the newer copy when a failed Redis
    * `set` leaves Redis holding an older session than in-process memory.
    * Legacy sessions persisted before this field existed read as `0`.

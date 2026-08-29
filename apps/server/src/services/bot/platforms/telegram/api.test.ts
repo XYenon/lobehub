@@ -286,4 +286,43 @@ describe('TelegramApi Guest Mode', () => {
     expect(body.media.caption).toHaveLength(1024);
     expect(body.media.caption.endsWith('...')).toBe(true);
   });
+
+  it('editInlineMessageCaption uses inline_message_id and ignores not-modified', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      telegramErrorResponse(400, 'Bad Request: message is not modified'),
+    );
+
+    const api = new TelegramApi(BOT_TOKEN);
+    await expect(
+      api.editInlineMessageCaption({ caption: 'same', inlineMessageId: 'inline-1' }),
+    ).resolves.toBeUndefined();
+
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.inline_message_id).toBe('inline-1');
+    expect(body.caption).toBe('same');
+    expect(body.parse_mode).toBe('HTML');
+    expect(body.chat_id).toBeUndefined();
+  });
+
+  it('editInlineMessageCaption retries without parse_mode on HTML parse error', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(
+        telegramErrorResponse(
+          400,
+          'Bad Request: can\'t parse entities: Can\'t find end tag corresponding to start tag "b"',
+        ),
+      )
+      .mockResolvedValueOnce(okResponse({}));
+
+    const api = new TelegramApi(BOT_TOKEN);
+    await api.editInlineMessageCaption({
+      caption: '<b>broken',
+      inlineMessageId: 'inline-1',
+    });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    const retryBody = JSON.parse((fetchSpy.mock.calls[1][1] as RequestInit).body as string);
+    expect(retryBody.parse_mode).toBeUndefined();
+    expect(retryBody.caption).toBe('broken');
+  });
 });

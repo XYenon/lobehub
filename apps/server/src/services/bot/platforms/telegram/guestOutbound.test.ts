@@ -94,6 +94,99 @@ describe('deliverGuestCreate / deliverGuestEdit', () => {
     });
   });
 
+  it('updates the caption after a guest reply has been converted to a photo', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(okResponse({ inline_message_id: 'inline-photo' }))
+      .mockResolvedValueOnce(okResponse({}))
+      .mockResolvedValueOnce(okResponse({}));
+    await saveTelegramGuestSession(SESSION_SCOPE, THREAD_ID, { guestQueryId: 'gq-1' });
+
+    const api = new TelegramApi(BOT_TOKEN);
+    await deliverGuestCreate(api, SESSION_SCOPE, THREAD_ID, 'hello');
+    await deliverGuestCreate(api, SESSION_SCOPE, THREAD_ID, {
+      attachments: [
+        {
+          fetchUrl: 'https://cdn.example/pic.png',
+          mimeType: 'image/png',
+          type: 'image',
+        },
+      ],
+      content: 'caption',
+    });
+    await deliverGuestEdit(api, SESSION_SCOPE, THREAD_ID, 'guest-inline:inline-photo', 'final');
+
+    expect(String(fetchSpy.mock.calls[1]![0])).toContain('/editMessageMedia');
+    expect(String(fetchSpy.mock.calls[2]![0])).toContain('/editMessageCaption');
+    expect(String(fetchSpy.mock.calls[2]![0])).not.toContain('/editMessageText');
+    const captionBody = JSON.parse((fetchSpy.mock.calls[2]![1] as RequestInit).body as string);
+    expect(captionBody.inline_message_id).toBe('inline-photo');
+    expect(captionBody.caption).toBe('final');
+    expect(captionBody.chat_id).toBeUndefined();
+  });
+
+  it('updates the caption when the first guest reply was already converted to a photo', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(okResponse({ inline_message_id: 'inline-photo' }))
+      .mockResolvedValueOnce(okResponse({}))
+      .mockResolvedValueOnce(okResponse({}));
+    await saveTelegramGuestSession(SESSION_SCOPE, THREAD_ID, { guestQueryId: 'gq-1' });
+
+    const api = new TelegramApi(BOT_TOKEN);
+    await deliverGuestCreate(api, SESSION_SCOPE, THREAD_ID, {
+      attachments: [
+        {
+          fetchUrl: 'https://cdn.example/pic.png',
+          mimeType: 'image/png',
+          type: 'image',
+        },
+      ],
+      content: 'caption',
+    });
+    await deliverGuestEdit(api, SESSION_SCOPE, THREAD_ID, 'guest-inline:inline-photo', 'updated');
+
+    expect(String(fetchSpy.mock.calls[2]![0])).toContain('/editMessageCaption');
+    const captionBody = JSON.parse((fetchSpy.mock.calls[2]![1] as RequestInit).body as string);
+    expect(captionBody.caption).toBe('updated');
+  });
+
+  it('replaces an existing guest photo with a later image instead of editing text', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(okResponse({ inline_message_id: 'inline-photo' }))
+      .mockResolvedValueOnce(okResponse({}))
+      .mockResolvedValueOnce(okResponse({}));
+    await saveTelegramGuestSession(SESSION_SCOPE, THREAD_ID, { guestQueryId: 'gq-1' });
+
+    const api = new TelegramApi(BOT_TOKEN);
+    await deliverGuestCreate(api, SESSION_SCOPE, THREAD_ID, {
+      attachments: [
+        {
+          fetchUrl: 'https://cdn.example/first.png',
+          mimeType: 'image/png',
+          type: 'image',
+        },
+      ],
+      content: 'first',
+    });
+    await deliverGuestEdit(api, SESSION_SCOPE, THREAD_ID, 'guest-inline:inline-photo', {
+      attachments: [
+        {
+          fetchUrl: 'https://cdn.example/second.png',
+          mimeType: 'image/png',
+          type: 'image',
+        },
+      ],
+      content: 'second',
+    });
+
+    expect(String(fetchSpy.mock.calls[2]![0])).toContain('/editMessageMedia');
+    const mediaBody = JSON.parse((fetchSpy.mock.calls[2]![1] as RequestInit).body as string);
+    expect(mediaBody.media).toMatchObject({
+      caption: 'second',
+      media: 'https://cdn.example/second.png',
+      type: 'photo',
+    });
+  });
+
   it('keeps the article text when an attachment has only base64 data', async () => {
     fetchSpy.mockResolvedValueOnce(okResponse({ inline_message_id: 'inline-data' }));
     await saveTelegramGuestSession(SESSION_SCOPE, THREAD_ID, { guestQueryId: 'gq-1' });

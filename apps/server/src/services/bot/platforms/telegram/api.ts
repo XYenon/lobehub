@@ -725,6 +725,55 @@ export class TelegramApi {
   }
 
   /**
+   * Update the caption of a guest inline media message. Telegram cannot convert
+   * a photo back into a text message, so later text-only Guest Mode edits go
+   * here once `editMessageMedia` has succeeded.
+   */
+  async editInlineMessageCaption(params: {
+    caption: string;
+    inlineMessageId: string;
+  }): Promise<void> {
+    log('editInlineMessageCaption');
+    const caption = this.truncateCaption(params.caption);
+
+    const send = (useHtml: boolean): Promise<unknown> => {
+      const captionForSend = useHtml ? caption : this.truncateCaption(stripHTML(caption));
+      return this.call('editMessageCaption', {
+        caption: captionForSend,
+        inline_message_id: params.inlineMessageId,
+        parse_mode: captionForSend && useHtml ? 'HTML' : undefined,
+      });
+    };
+
+    try {
+      await send(true);
+    } catch (error) {
+      const message = (error as { message?: string } | null)?.message;
+      if (message?.includes('message is not modified')) return;
+      if (isParseEntitiesError(error)) {
+        log('editInlineMessageCaption: HTML parse failed, retrying as plain text');
+        try {
+          await send(false);
+          return;
+        } catch (retryError) {
+          if (isEditUnavailable(retryError)) {
+            throw new TelegramEditUnavailableError(
+              retryError instanceof Error ? retryError.message : String(retryError),
+            );
+          }
+          throw retryError;
+        }
+      }
+      if (isEditUnavailable(error)) {
+        throw new TelegramEditUnavailableError(
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Replace a guest inline message with media. Used so Guest Mode can still
    * deliver photos/files after the query was answered with a text placeholder.
    */

@@ -104,6 +104,24 @@ const applyMedia = async (
   }
 };
 
+/**
+ * Telegram distinguishes text vs media edits. After `editMessageMedia` the
+ * inline message is a photo, so later body updates must use caption edits.
+ * Guest Mode keeps the photo rather than trying to convert it back to text.
+ */
+const editGuestMessageBody = async (
+  api: TelegramApi,
+  inlineMessageId: string,
+  text: string,
+  mediaType: TelegramGuestSession['mediaType'],
+): Promise<void> => {
+  if (mediaType === 'photo') {
+    await api.editInlineMessageCaption({ caption: text, inlineMessageId });
+    return;
+  }
+  await api.editMessageText(inlineMessageId, text);
+};
+
 export const deliverGuestCreate = async (
   api: TelegramApi,
   sessionScope: string,
@@ -166,14 +184,19 @@ const answerGuestQuery = async (
     session.guestQueryId,
     prepared.displayText,
   );
-  if (canApplyMedia(attachments, text)) {
-    await applyMedia(api, inlineMessageId, attachments[0], text);
+  let mediaType = session.mediaType;
+  if (
+    canApplyMedia(attachments, text) &&
+    (await applyMedia(api, inlineMessageId, attachments[0], text))
+  ) {
+    mediaType = 'photo';
   }
 
   await saveTelegramGuestSession(sessionScope, threadId, {
     ...session,
     inlineMessageId,
     lastText: prepared.storedText,
+    mediaType,
   });
   return { id: encodeGuestInlineMessageId(inlineMessageId) };
 };
@@ -198,20 +221,24 @@ const editExistingGuest = async (
     nextText = `${session.lastText}\n\n${text}`;
   }
   const prepared = prepareGuestText(nextText, attachments, session.locale);
+  let mediaType = session.mediaType;
 
   if (canApplyMedia(attachments, nextText)) {
     const delivered = await applyMedia(api, inlineMessageId, attachments[0], nextText);
-    if (!delivered && prepared.displayText.trim()) {
-      await api.editMessageText(inlineMessageId, prepared.displayText);
+    if (delivered) {
+      mediaType = 'photo';
+    } else if (prepared.displayText.trim()) {
+      await editGuestMessageBody(api, inlineMessageId, prepared.displayText, mediaType);
     }
   } else if (prepared.displayText.trim()) {
-    await api.editMessageText(inlineMessageId, prepared.displayText);
+    await editGuestMessageBody(api, inlineMessageId, prepared.displayText, mediaType);
   }
 
   await saveTelegramGuestSession(sessionScope, threadId, {
     ...session,
     inlineMessageId,
     lastText: prepared.storedText,
+    mediaType,
   });
   return { id: encodeGuestInlineMessageId(inlineMessageId) };
 };
