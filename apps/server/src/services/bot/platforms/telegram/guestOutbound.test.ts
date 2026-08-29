@@ -201,6 +201,88 @@ describe('deliverGuestCreate / deliverGuestEdit', () => {
     expect(session?.truncated).toBe(true);
   });
 
+  it('keeps the truncation notice when a later caption chunk also replaces the photo', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(okResponse({ inline_message_id: 'inline-photo' }))
+      .mockResolvedValueOnce(okResponse({}))
+      .mockResolvedValueOnce(okResponse({}))
+      .mockResolvedValueOnce(okResponse({}));
+    await saveTelegramGuestSession(SESSION_SCOPE, THREAD_ID, { guestQueryId: 'gq-1' });
+
+    const api = new TelegramApi(BOT_TOKEN);
+    await deliverGuestCreate(api, SESSION_SCOPE, THREAD_ID, {
+      attachments: [
+        {
+          fetchUrl: 'https://cdn.example/first.png',
+          mimeType: 'image/png',
+          type: 'image',
+        },
+      ],
+      content: 'caption',
+    });
+    await deliverGuestEdit(
+      api,
+      SESSION_SCOPE,
+      THREAD_ID,
+      'guest-inline:inline-photo',
+      'A'.repeat(1500),
+    );
+    await deliverGuestCreate(api, SESSION_SCOPE, THREAD_ID, {
+      attachments: [
+        {
+          fetchUrl: 'https://cdn.example/second.png',
+          mimeType: 'image/png',
+          type: 'image',
+        },
+      ],
+      content: 'VISIBLE',
+    });
+
+    expect(String(fetchSpy.mock.calls[3]![0])).toContain('/editMessageMedia');
+    const mediaBody = JSON.parse((fetchSpy.mock.calls[3]![1] as RequestInit).body as string);
+    expect(mediaBody.media.caption).toContain('VISIBLE');
+    expect(mediaBody.media.caption).toContain(
+      'Response truncated because Telegram Guest Mode supports one 1024-character reply.',
+    );
+    expect(mediaBody.media.caption).toHaveLength(1024);
+
+    await expect(getTelegramGuestSession(SESSION_SCOPE, THREAD_ID)).resolves.toMatchObject({
+      mediaType: 'photo',
+      truncated: true,
+    });
+  });
+
+  it('does not count a successfully delivered image fallback link against caption budget', async () => {
+    fetchSpy.mockResolvedValueOnce(okResponse({}));
+    await saveTelegramGuestSession(SESSION_SCOPE, THREAD_ID, {
+      guestQueryId: 'gq-1',
+      inlineMessageId: 'inline-photo',
+      mediaType: 'photo',
+    });
+    const caption = 'A'.repeat(1000);
+
+    const api = new TelegramApi(BOT_TOKEN);
+    await deliverGuestEdit(api, SESSION_SCOPE, THREAD_ID, 'guest-inline:inline-photo', {
+      attachments: [
+        {
+          fetchUrl: `https://cdn.example/${'long-path-'.repeat(20)}photo.png`,
+          mimeType: 'image/png',
+          type: 'image',
+        },
+      ],
+      content: caption,
+    });
+
+    const mediaBody = JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
+    expect(String(fetchSpy.mock.calls[0]![0])).toContain('/editMessageMedia');
+    expect(mediaBody.media.caption).toBe(caption);
+    await expect(getTelegramGuestSession(SESSION_SCOPE, THREAD_ID)).resolves.toMatchObject({
+      lastText: caption,
+      mediaType: 'photo',
+      truncated: false,
+    });
+  });
+
   it('clears persisted truncation state when an edit replaces the body with shorter text', async () => {
     fetchSpy.mockImplementation(async () => okResponse({}));
     await saveTelegramGuestSession(SESSION_SCOPE, THREAD_ID, {

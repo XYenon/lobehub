@@ -191,7 +191,7 @@ const answerGuestQuery = async (
   text: string,
   attachments: BotMessageAttachment[] | undefined,
 ): Promise<{ id: string }> => {
-  const prepared = prepareGuestText(
+  const fallbackPrepared = prepareGuestText(
     text,
     attachments,
     session.locale,
@@ -199,22 +199,29 @@ const answerGuestQuery = async (
   );
   const { inline_message_id: inlineMessageId } = await api.answerGuestArticle(
     session.guestQueryId,
-    prepared.displayText,
+    fallbackPrepared.displayText,
   );
   let mediaType = session.mediaType;
-  if (
-    canApplyMedia(attachments, text) &&
-    (await applyMedia(api, inlineMessageId, attachments[0], text))
-  ) {
-    mediaType = 'photo';
+  let persistedPrepared = fallbackPrepared;
+  if (canApplyMedia(attachments, text)) {
+    const mediaPrepared = prepareGuestText(
+      text,
+      undefined,
+      session.locale,
+      TELEGRAM_CAPTION_LIMIT,
+    );
+    if (await applyMedia(api, inlineMessageId, attachments[0], mediaPrepared.displayText)) {
+      mediaType = 'photo';
+      persistedPrepared = mediaPrepared;
+    }
   }
 
   await saveTelegramGuestSession(sessionScope, threadId, {
     ...session,
     inlineMessageId,
-    lastText: prepared.storedText,
+    lastText: persistedPrepared.storedText,
     mediaType,
-    truncated: prepared.truncated,
+    truncated: persistedPrepared.truncated,
   });
   return { id: encodeGuestInlineMessageId(inlineMessageId) };
 };
@@ -241,7 +248,7 @@ const editExistingGuest = async (
     nextText = `${session.lastText}${separator}${text}`;
     appendedTextLength = separator.length + text.length;
   }
-  const prepared = prepareGuestText(
+  const fallbackPrepared = prepareGuestText(
     nextText,
     attachments,
     session.locale,
@@ -250,24 +257,39 @@ const editExistingGuest = async (
     session.truncated ? appendedTextLength : 0,
   );
   let mediaType = session.mediaType;
+  let persistedPrepared = fallbackPrepared;
 
   if (canApplyMedia(attachments, nextText)) {
-    const delivered = await applyMedia(api, inlineMessageId, attachments[0], nextText);
+    const mediaPrepared = prepareGuestText(
+      nextText,
+      undefined,
+      session.locale,
+      TELEGRAM_CAPTION_LIMIT,
+      !options.replaceText && session.truncated,
+      session.truncated ? appendedTextLength : 0,
+    );
+    const delivered = await applyMedia(
+      api,
+      inlineMessageId,
+      attachments[0],
+      mediaPrepared.displayText,
+    );
     if (delivered) {
       mediaType = 'photo';
-    } else if (prepared.displayText.trim()) {
-      await editGuestMessageBody(api, inlineMessageId, prepared.displayText, mediaType);
+      persistedPrepared = mediaPrepared;
+    } else if (fallbackPrepared.displayText.trim()) {
+      await editGuestMessageBody(api, inlineMessageId, fallbackPrepared.displayText, mediaType);
     }
-  } else if (prepared.displayText.trim()) {
-    await editGuestMessageBody(api, inlineMessageId, prepared.displayText, mediaType);
+  } else if (fallbackPrepared.displayText.trim()) {
+    await editGuestMessageBody(api, inlineMessageId, fallbackPrepared.displayText, mediaType);
   }
 
   await saveTelegramGuestSession(sessionScope, threadId, {
     ...session,
     inlineMessageId,
-    lastText: prepared.storedText,
+    lastText: persistedPrepared.storedText,
     mediaType,
-    truncated: prepared.truncated,
+    truncated: persistedPrepared.truncated,
   });
   return { id: encodeGuestInlineMessageId(inlineMessageId) };
 };
