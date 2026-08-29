@@ -110,9 +110,12 @@ export class MessengerTelegramBinder implements MessengerPlatformBinder {
         normalizeBotReplyLocale(getTelegramGuestAuthorLanguageCode(ctx.message)) ??
         getBotReplyLocale('telegram');
       const botUsername = config.botUsername?.replace(/^@/, '').trim();
-      if (botUsername) {
-        await api.answerGuestArticle(guestQueryId, renderGuestCopy('guestLinkPromptChat', lng), {
-          replyMarkup: {
+      const text = renderGuestCopy(
+        botUsername ? 'guestLinkPromptChat' : 'guestLinkPromptDm',
+        lng,
+      );
+      const replyMarkup = botUsername
+        ? {
             inline_keyboard: [
               [
                 {
@@ -121,14 +124,12 @@ export class MessengerTelegramBinder implements MessengerPlatformBinder {
                 },
               ],
             ],
-          },
-          title: renderGuestCopy('guestLinkTitle', lng),
-        });
-      } else {
-        await api.answerGuestArticle(guestQueryId, renderGuestCopy('guestLinkPromptDm', lng), {
-          title: renderGuestCopy('guestLinkTitle', lng),
-        });
-      }
+          }
+        : undefined;
+      await api.answerGuestArticle(guestQueryId, text, {
+        replyMarkup,
+        title: renderGuestCopy('guestLinkTitle', lng),
+      });
       return;
     }
 

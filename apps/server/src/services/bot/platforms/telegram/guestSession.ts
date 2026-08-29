@@ -67,6 +67,10 @@ const writeMemory = (key: string, session: TelegramGuestSession): void => {
   memory.set(key, { expiresAt: now + TTL_SECONDS * 1000, session });
 };
 
+const writeMemoryIfAbsent = (key: string, session: TelegramGuestSession): void => {
+  if (!readMemory(key)) writeMemory(key, session);
+};
+
 export async function saveTelegramGuestSession(
   sessionScope: string,
   threadId: string,
@@ -120,11 +124,11 @@ export async function initializeTelegramGuestSession(
     // An outbound save can complete locally while the Redis command is in
     // flight. Keep that newer local state instead of replacing it with the
     // inbound-only initialization.
-    if (!readMemory(key)) writeMemory(key, stamped);
+    writeMemoryIfAbsent(key, stamped);
   } catch (error) {
     // Redis being unavailable removes the cross-process guarantee, but the
     // same-process fallback must still preserve an existing outbound session.
-    if (!readMemory(key)) writeMemory(key, stamped);
+    writeMemoryIfAbsent(key, stamped);
     console.error(
       `[guestSession] failed to initialize Telegram guest session in Redis (thread=${threadId}); using in-memory state`,
       error,

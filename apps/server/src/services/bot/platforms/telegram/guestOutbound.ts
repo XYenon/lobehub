@@ -40,16 +40,32 @@ const attachmentFallbackText = (
 const guestBodyLimit = (mediaType: TelegramGuestSession['mediaType']): number =>
   mediaType === 'photo' ? TELEGRAM_CAPTION_LIMIT : TELEGRAM_TEXT_LIMIT;
 
+interface GuestTextOptions {
+  attachments?: BotMessageAttachment[];
+  limit?: number;
+  locale?: BotReplyLocale;
+  retainedTailLength?: number;
+  retainTruncationNotice?: boolean;
+}
+
+interface PreparedGuestText {
+  displayText: string;
+  storedText: string;
+  truncated: boolean;
+}
+
 const prepareGuestText = (
   text: string,
-  attachments: BotMessageAttachment[] | undefined,
-  lng?: BotReplyLocale,
-  limit = TELEGRAM_TEXT_LIMIT,
-  retainTruncationNotice = false,
-  retainedTailLength = 0,
-): { displayText: string; storedText: string; truncated: boolean } => {
+  {
+    attachments,
+    limit = TELEGRAM_TEXT_LIMIT,
+    locale,
+    retainedTailLength = 0,
+    retainTruncationNotice = false,
+  }: GuestTextOptions = {},
+): PreparedGuestText => {
   const fallbackLines =
-    attachments?.map((att, index) => attachmentFallbackText(att, index, lng)) ?? [];
+    attachments?.map((att, index) => attachmentFallbackText(att, index, locale)) ?? [];
   const fallbackText = fallbackLines.join('\n');
   let combinedText = fallbackText || text;
   if (text.trim() && fallbackText) {
@@ -59,8 +75,8 @@ const prepareGuestText = (
     return { displayText: combinedText, storedText: text, truncated: false };
   }
 
-  const truncatedNotice = `\n\n${renderGuestTruncated(limit, lng)}`;
-  const overflowNotice = renderGuestCopy('guestAttachmentOverflow', lng);
+  const truncatedNotice = `\n\n${renderGuestTruncated(limit, locale)}`;
+  const overflowNotice = renderGuestCopy('guestAttachmentOverflow', locale);
   const fallbackBudget = limit - truncatedNotice.length - overflowNotice.length;
   const includedFallbacks: string[] = [];
   for (const line of fallbackLines) {
@@ -114,6 +130,20 @@ const applyMedia = async (
     log('editInlineMessageMedia failed: %O', error);
     return false;
   }
+};
+
+const tryApplyMedia = async (
+  api: TelegramApi,
+  inlineMessageId: string,
+  attachments: BotMessageAttachment[] | undefined,
+  text: string,
+  options: Omit<GuestTextOptions, 'attachments' | 'limit'>,
+): Promise<PreparedGuestText | undefined> => {
+  if (!canApplyMedia(attachments, text)) return undefined;
+
+  const prepared = prepareGuestText(text, { ...options, limit: TELEGRAM_CAPTION_LIMIT });
+  const delivered = await applyMedia(api, inlineMessageId, attachments[0], prepared.displayText);
+  return delivered ? prepared : undefined;
 };
 
 /**
@@ -191,36 +221,25 @@ const answerGuestQuery = async (
   text: string,
   attachments: BotMessageAttachment[] | undefined,
 ): Promise<{ id: string }> => {
-  const fallbackPrepared = prepareGuestText(
-    text,
+  const fallbackPrepared = prepareGuestText(text, {
     attachments,
-    session.locale,
-    guestBodyLimit(session.mediaType),
-  );
+    limit: guestBodyLimit(session.mediaType),
+    locale: session.locale,
+  });
   const { inline_message_id: inlineMessageId } = await api.answerGuestArticle(
     session.guestQueryId,
     fallbackPrepared.displayText,
   );
-  let mediaType = session.mediaType;
-  let persistedPrepared = fallbackPrepared;
-  if (canApplyMedia(attachments, text)) {
-    const mediaPrepared = prepareGuestText(
-      text,
-      undefined,
-      session.locale,
-      TELEGRAM_CAPTION_LIMIT,
-    );
-    if (await applyMedia(api, inlineMessageId, attachments[0], mediaPrepared.displayText)) {
-      mediaType = 'photo';
-      persistedPrepared = mediaPrepared;
-    }
-  }
+  const mediaPrepared = await tryApplyMedia(api, inlineMessageId, attachments, text, {
+    locale: session.locale,
+  });
+  const persistedPrepared = mediaPrepared ?? fallbackPrepared;
 
   await saveTelegramGuestSession(sessionScope, threadId, {
     ...session,
     inlineMessageId,
     lastText: persistedPrepared.storedText,
-    mediaType,
+    mediaType: mediaPrepared ? 'photo' : session.mediaType,
     truncated: persistedPrepared.truncated,
   });
   return { id: encodeGuestInlineMessageId(inlineMessageId) };
@@ -248,38 +267,26 @@ const editExistingGuest = async (
     nextText = `${session.lastText}${separator}${text}`;
     appendedTextLength = separator.length + text.length;
   }
-  const fallbackPrepared = prepareGuestText(
-    nextText,
+  const retainTruncationNotice = !options.replaceText && session.truncated;
+  const retainedTailLength = session.truncated ? appendedTextLength : 0;
+  const fallbackPrepared = prepareGuestText(nextText, {
     attachments,
-    session.locale,
-    guestBodyLimit(session.mediaType),
-    !options.replaceText && session.truncated,
-    session.truncated ? appendedTextLength : 0,
-  );
+    limit: guestBodyLimit(session.mediaType),
+    locale: session.locale,
+    retainedTailLength,
+    retainTruncationNotice,
+  });
   let mediaType = session.mediaType;
   let persistedPrepared = fallbackPrepared;
 
-  if (canApplyMedia(attachments, nextText)) {
-    const mediaPrepared = prepareGuestText(
-      nextText,
-      undefined,
-      session.locale,
-      TELEGRAM_CAPTION_LIMIT,
-      !options.replaceText && session.truncated,
-      session.truncated ? appendedTextLength : 0,
-    );
-    const delivered = await applyMedia(
-      api,
-      inlineMessageId,
-      attachments[0],
-      mediaPrepared.displayText,
-    );
-    if (delivered) {
-      mediaType = 'photo';
-      persistedPrepared = mediaPrepared;
-    } else if (fallbackPrepared.displayText.trim()) {
-      await editGuestMessageBody(api, inlineMessageId, fallbackPrepared.displayText, mediaType);
-    }
+  const mediaPrepared = await tryApplyMedia(api, inlineMessageId, attachments, nextText, {
+    locale: session.locale,
+    retainedTailLength,
+    retainTruncationNotice,
+  });
+  if (mediaPrepared) {
+    mediaType = 'photo';
+    persistedPrepared = mediaPrepared;
   } else if (fallbackPrepared.displayText.trim()) {
     await editGuestMessageBody(api, inlineMessageId, fallbackPrepared.displayText, mediaType);
   }
