@@ -88,6 +88,44 @@ export async function saveTelegramGuestSession(
   }
 }
 
+/**
+ * Creates the inbound Guest Mode session without replacing reply state that
+ * may already have been persisted by an earlier delivery of the same webhook.
+ */
+export async function initializeTelegramGuestSession(
+  sessionScope: string,
+  threadId: string,
+  session: Pick<TelegramGuestSession, 'guestQueryId' | 'locale'>,
+): Promise<void> {
+  const key = buildKey(sessionScope, threadId);
+  if (readMemory(key)) return;
+
+  const stamped = { ...session, savedAt: Date.now() };
+  const redis = getAgentRuntimeRedisClient();
+  if (!redis) {
+    writeMemory(key, stamped);
+    return;
+  }
+
+  try {
+    const created = await redis.set(key, JSON.stringify(stamped), 'EX', TTL_SECONDS, 'NX');
+    if (!created) return;
+
+    // An outbound save can complete locally while the Redis command is in
+    // flight. Keep that newer local state instead of replacing it with the
+    // inbound-only initialization.
+    if (!readMemory(key)) writeMemory(key, stamped);
+  } catch (error) {
+    // Redis being unavailable removes the cross-process guarantee, but the
+    // same-process fallback must still preserve an existing outbound session.
+    if (!readMemory(key)) writeMemory(key, stamped);
+    console.error(
+      `[guestSession] failed to initialize Telegram guest session in Redis (thread=${threadId}); using in-memory state`,
+      error,
+    );
+  }
+}
+
 export async function getTelegramGuestSession(
   sessionScope: string,
   threadId: string,

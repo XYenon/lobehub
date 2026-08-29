@@ -2,7 +2,11 @@ import { Chat } from 'chat';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { LobeTelegramAdapter } from './guestAdapter';
-import { getTelegramGuestSession, resetTelegramGuestSessionsForTest } from './guestSession';
+import {
+  getTelegramGuestSession,
+  resetTelegramGuestSessionsForTest,
+  saveTelegramGuestSession,
+} from './guestSession';
 import { isGuestTelegramThreadId } from './threadId';
 
 vi.mock('@/server/modules/AgentRuntime/redis', () => ({
@@ -239,6 +243,55 @@ describe('LobeTelegramAdapter Guest Mode', () => {
         'telegram:guest:-100123:bot:bot-1:message:13',
       );
       expect(session).toMatchObject({ guestQueryId: 'gq-locale', locale: 'zh-CN' });
+    });
+  });
+
+  it('preserves outbound session state when Telegram redelivers a guest update', async () => {
+    mockGetMe();
+    const adapter = createGuestAdapter('bot-1');
+    const mentions: string[] = [];
+    const bot = new Chat({
+      adapters: { telegram: adapter },
+      state: createMemoryState() as never,
+      userName: 'mybot',
+    });
+    bot.onNewMention(async (_thread, message) => {
+      mentions.push(message.id);
+    });
+    await bot.initialize();
+
+    const update = {
+      guest_message: {
+        chat: { id: -100123, title: 'Room', type: 'supergroup' },
+        date: 1,
+        guest_bot_caller_user: { first_name: 'Ada', id: 7, is_bot: false },
+        guest_query_id: 'gq-duplicate',
+        message_id: 14,
+        text: '@mybot hello',
+      },
+      update_id: 4,
+    };
+    const threadId = 'telegram:guest:-100123:bot:bot-1:message:14';
+
+    processUpdate(adapter, update);
+    await vi.waitFor(() => {
+      expect(mentions).toHaveLength(1);
+    });
+    await saveTelegramGuestSession('bot-1', threadId, {
+      guestQueryId: 'gq-duplicate',
+      inlineMessageId: 'inline-14',
+      lastText: 'photo reply',
+      mediaType: 'photo',
+    });
+
+    processUpdate(adapter, update);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(mentions).toHaveLength(1);
+    await expect(getTelegramGuestSession('bot-1', threadId)).resolves.toMatchObject({
+      inlineMessageId: 'inline-14',
+      lastText: 'photo reply',
+      mediaType: 'photo',
     });
   });
 

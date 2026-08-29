@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   getTelegramGuestSession,
   getTelegramGuestSessionMemorySizeForTest,
+  initializeTelegramGuestSession,
   resetTelegramGuestSessionsForTest,
   saveTelegramGuestSession,
 } from './guestSession';
@@ -49,6 +50,28 @@ describe('telegram guest session (memory fallback)', () => {
     const session = await getTelegramGuestSession('bot-1', 'telegram:guest:-1:message:10');
     expect(session?.guestQueryId).toBe('gq-1');
     expect(session?.savedAt).toEqual(expect.any(Number));
+  });
+
+  it('does not replace an existing outbound session during initialization', async () => {
+    const threadId = 'telegram:guest:-1:message:10';
+    await saveTelegramGuestSession('bot-1', threadId, {
+      guestQueryId: 'gq-1',
+      inlineMessageId: 'inline-1',
+      lastText: 'reply',
+      mediaType: 'photo',
+    });
+
+    await initializeTelegramGuestSession('bot-1', threadId, {
+      guestQueryId: 'gq-1',
+      locale: 'zh-CN',
+    });
+
+    await expect(getTelegramGuestSession('bot-1', threadId)).resolves.toMatchObject({
+      guestQueryId: 'gq-1',
+      inlineMessageId: 'inline-1',
+      lastText: 'reply',
+      mediaType: 'photo',
+    });
   });
 
   it('isolates sessions by bot and guest invocation', async () => {
@@ -100,7 +123,8 @@ describe('telegram guest session (Redis-backed)', () => {
     redisState.enabled = true;
     store.clear();
     redis.get.mockImplementation(async (key: string) => store.get(key) ?? null);
-    redis.set.mockImplementation(async (key: string, value: string) => {
+    redis.set.mockImplementation(async (key: string, value: string, ...args: unknown[]) => {
+      if (args.includes('NX') && store.has(key)) return null;
       store.set(key, value);
       return 'OK';
     });
@@ -122,6 +146,33 @@ describe('telegram guest session (Redis-backed)', () => {
     await expect(
       getTelegramGuestSession('bot-1', 'telegram:guest:-1:message:10'),
     ).resolves.toMatchObject({ guestQueryId: 'gq-1', inlineMessageId: 'inline-1' });
+  });
+
+  it('atomically initializes without replacing an existing Redis session', async () => {
+    const threadId = 'telegram:guest:-1:message:10';
+    await saveTelegramGuestSession('bot-1', threadId, {
+      guestQueryId: 'gq-1',
+      inlineMessageId: 'inline-1',
+      mediaType: 'photo',
+    });
+    resetTelegramGuestSessionsForTest();
+
+    await initializeTelegramGuestSession('bot-1', threadId, {
+      guestQueryId: 'gq-1',
+      locale: 'zh-CN',
+    });
+
+    expect(redis.set).toHaveBeenLastCalledWith(
+      'bot:telegram-guest:bot-1:telegram:guest:-1:message:10',
+      expect.any(String),
+      'EX',
+      30 * 60,
+      'NX',
+    );
+    await expect(getTelegramGuestSession('bot-1', threadId)).resolves.toMatchObject({
+      inlineMessageId: 'inline-1',
+      mediaType: 'photo',
+    });
   });
 
   it('prefers the newer in-memory session over stale Redis after a failed set', async () => {

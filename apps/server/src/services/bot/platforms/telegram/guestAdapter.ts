@@ -11,7 +11,7 @@ import {
   deliverGuestEdit,
   messengerContentFromPostable,
 } from './guestOutbound';
-import { saveTelegramGuestSession } from './guestSession';
+import { initializeTelegramGuestSession } from './guestSession';
 import {
   encodeGuestTelegramThreadId,
   isGuestTelegramThreadId,
@@ -196,7 +196,7 @@ export class LobeTelegramAdapter extends TelegramAdapter {
         // Remember the summoning user's Telegram locale so Guest Mode
         // notices (truncation / attachment fallbacks) render in their
         // language on the first reply and every later edit.
-        await saveTelegramGuestSession(this.sessionScope, threadId, {
+        await initializeTelegramGuestSession(this.sessionScope, threadId, {
           guestQueryId,
           locale: normalizeBotReplyLocale(caller?.language_code),
         });
