@@ -5,12 +5,22 @@ interface RawReferencedMessage {
   content?: string;
 }
 
+interface TelegramReplyToMessage {
+  caption?: string;
+  from?: { first_name?: string; username?: string };
+  text?: string;
+}
+
+interface ReferencedRaw {
+  referenced_message?: RawReferencedMessage;
+  reply_to_message?: TelegramReplyToMessage;
+}
+
 interface MessageLike {
   author: { fullName?: string; userId: string; userName?: string };
   raw?: {
     author?: { avatar?: string | null; global_name?: string | null };
-    referenced_message?: RawReferencedMessage;
-  };
+  } & ReferencedRaw;
   text: string;
 }
 
@@ -19,19 +29,27 @@ interface FormatPromptOptions {
   sanitizeUserInput?: (text: string) => string;
 }
 
+const wrapReferencedMessage = (sender: string, content: string): string =>
+  `<referenced_message sender="${sender}">${content}</referenced_message>`;
+
 /**
  * Extract referenced (replied-to) message from raw payload
  * and format it as an XML tag for the agent prompt.
  */
-export const formatReferencedMessage = (
-  raw: { referenced_message?: RawReferencedMessage } | undefined,
-): string | undefined => {
-  const ref = raw?.referenced_message;
-  if (!ref?.content) return undefined;
+export const formatReferencedMessage = (raw: ReferencedRaw | undefined): string | undefined => {
+  const discordRef = raw?.referenced_message;
+  if (discordRef?.content) {
+    const sender = discordRef.author?.global_name || discordRef.author?.username || 'unknown';
+    return wrapReferencedMessage(sender, discordRef.content);
+  }
 
-  const sender = ref.author?.global_name || ref.author?.username || 'unknown';
+  const telegramRef = raw?.reply_to_message;
+  if (!telegramRef) return undefined;
+  const telegramContent = telegramRef.text || telegramRef.caption;
+  if (!telegramContent) return undefined;
 
-  return `<referenced_message sender="${sender}">${ref.content}</referenced_message>`;
+  const sender = telegramRef.from?.first_name || telegramRef.from?.username || 'unknown';
+  return wrapReferencedMessage(sender, telegramContent);
 };
 
 /**
