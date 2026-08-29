@@ -772,7 +772,7 @@ describe('validateAccessSettings', () => {
     expect(result.errors).toEqual([
       {
         field: 'userId',
-        message: expect.stringContaining('Pairing policy'),
+        message: expect.stringContaining('Pairing policies require'),
       },
     ]);
   });
