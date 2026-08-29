@@ -236,9 +236,16 @@ class TelegramWebhookClient implements PlatformClient {
             content,
           );
         },
+        // No `triggerTyping` here, on purpose. AgentBridgeService treats a
+        // present `triggerTyping` as "platform can show typing" and, when the
+        // message gateway is enabled, skips the initial placeholder post.
+        // Guest summons are one-shot `guest_query_id`s that must be answered
+        // quickly - deferring the first `createMessage` to agent completion
+        // risks blowing Telegram's guest-query response window. Leaving
+        // `triggerTyping` undefined forces the bridge to post the placeholder
+        // immediately, which consumes the query via `answerGuestQuery`.
         removeReaction: async () => {},
         replaceReaction: async () => {},
-        triggerTyping: async () => {},
       };
     }
 

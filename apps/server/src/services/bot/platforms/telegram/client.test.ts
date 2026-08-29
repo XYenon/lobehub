@@ -556,8 +556,13 @@ describe('TelegramWebhookClient guest messenger', () => {
     const messenger = client.getMessenger(GUEST_THREAD_ID);
 
     await messenger.createMessage('thinking');
-    await messenger.triggerTyping?.();
     await messenger.addReaction?.('1', '👀');
+
+    // Guest messengers must NOT expose `triggerTyping`: its presence makes
+    // AgentBridgeService treat the thread as typing-capable and skip the
+    // initial placeholder post when the message gateway is enabled, leaving
+    // the one-shot guest query unanswered until agent completion.
+    expect(messenger.triggerTyping).toBeUndefined();
 
     expect(String(fetchSpy.mock.calls[0]![0])).toContain('/answerGuestQuery');
     expect(fetchSpy.mock.calls.some((call) => String(call[0]).includes('/sendMessage'))).toBe(
