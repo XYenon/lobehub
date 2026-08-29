@@ -50,11 +50,14 @@ export const formatReferencedMessage = (raw: ReferencedRaw | undefined): string 
   if (!telegramContent && !selectedQuote) return undefined;
   const sender = telegramRef?.from?.first_name || telegramRef?.from?.username || 'unknown';
 
+  if (!telegramContent) {
+    return wrapReferencedMessage(sender, `<selected_quote>${selectedQuote}</selected_quote>`);
+  }
+
   if (selectedQuote) {
-    const fullMessage = telegramContent ? `<full_message>${telegramContent}</full_message>\n` : '';
     return wrapReferencedMessage(
       sender,
-      `${fullMessage}<selected_quote>${selectedQuote}</selected_quote>`,
+      `<full_message>${telegramContent}</full_message>\n<selected_quote>${selectedQuote}</selected_quote>`,
     );
   }
 
