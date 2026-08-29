@@ -11,6 +11,7 @@ import {
   renderFinalReply,
   renderGroupRejected,
   renderGuestCopy,
+  renderGuestTruncated,
   renderInlineError,
   renderLLMGenerating,
   renderSenderRejected,
@@ -726,7 +727,8 @@ describe('replyTemplate', () => {
       expect(renderGuestCopy('guestMediaUnavailable')).toBe(
         'This attachment can’t be delivered in Telegram Guest Mode.',
       );
-      expect(renderGuestCopy('guestTextTruncated')).toContain('4096');
+      expect(renderGuestTruncated(4096)).toContain('4096');
+      expect(renderGuestTruncated(1024)).toContain('1024');
       expect(renderGuestCopy('guestLinkPromptDm')).toContain('send /start');
     });
 
@@ -734,7 +736,8 @@ describe('replyTemplate', () => {
       expect(renderGuestCopy('guestMediaUnavailable', 'zh-CN')).toBe(
         '该附件无法通过 Telegram 访客模式送达。',
       );
-      expect(renderGuestCopy('guestTextTruncated', 'zh-CN')).toContain('4096');
+      expect(renderGuestTruncated(4096, 'zh-CN')).toContain('4096');
+      expect(renderGuestTruncated(1024, 'zh-CN')).toContain('1024');
       expect(renderGuestCopy('guestLinkPromptDm', 'zh-CN')).toContain('/start');
       expect(renderGuestCopy('guestLinkButton', 'zh-CN')).toBe('打开机器人');
     });

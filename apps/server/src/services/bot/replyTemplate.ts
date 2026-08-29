@@ -279,7 +279,7 @@ type SystemStrings = {
   guestLinkPromptDm: string;
   guestLinkTitle: string;
   guestMediaUnavailable: string;
-  guestTextTruncated: string;
+  guestTextTruncated: (limit: number) => string;
   inlineError: (message: string) => string;
   processing: string;
   /**
@@ -385,8 +385,8 @@ const SYSTEM_STRINGS: Partial<Record<BotReplyLocale, SystemStrings>> = {
       'Open a private chat with this bot and send /start to link your LobeHub account.',
     guestLinkTitle: 'Link LobeHub',
     guestMediaUnavailable: 'This attachment can’t be delivered in Telegram Guest Mode.',
-    guestTextTruncated:
-      'Response truncated because Telegram Guest Mode supports one 4096-character reply.',
+    guestTextTruncated: (limit) =>
+      `Response truncated because Telegram Guest Mode supports one ${limit}-character reply.`,
     inlineError: (message) => `**Error**: ${message}`,
     processing: 'Processing...',
     senderRejected:
@@ -476,7 +476,8 @@ const SYSTEM_STRINGS: Partial<Record<BotReplyLocale, SystemStrings>> = {
     guestLinkPromptDm: '请私聊该机器人并发送 /start，以完成 LobeHub 账户关联。',
     guestLinkTitle: '关联 LobeHub',
     guestMediaUnavailable: '该附件无法通过 Telegram 访客模式送达。',
-    guestTextTruncated: '回复已被截断：Telegram 访客模式仅支持一条 4096 字符的回复。',
+    guestTextTruncated: (limit) =>
+      `回复已被截断：Telegram 访客模式仅支持一条 ${limit} 字符的回复。`,
     inlineError: (message) => `**错误**：${message}`,
     processing: '处理中…',
     senderRejected: '抱歉，您没有与该机器人交互的权限。如需访问请联系机器人管理员。',
@@ -683,8 +684,7 @@ export type GuestCopyKey =
   | 'guestLinkPromptChat'
   | 'guestLinkPromptDm'
   | 'guestLinkTitle'
-  | 'guestMediaUnavailable'
-  | 'guestTextTruncated';
+  | 'guestMediaUnavailable';
 
 /**
  * Render a Telegram Guest Mode system string (link prompts, truncation and
@@ -696,6 +696,11 @@ export type GuestCopyKey =
  */
 export function renderGuestCopy(key: GuestCopyKey, lng?: BotReplyLocale): string {
   return getSystemStrings(lng)[key];
+}
+
+/** Truncation notice for the Guest Mode single-reply budget (text 4096 / caption 1024). */
+export function renderGuestTruncated(limit: number, lng?: BotReplyLocale): string {
+  return getSystemStrings(lng).guestTextTruncated(limit);
 }
 
 /**

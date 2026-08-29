@@ -3,7 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { TelegramApi } from './api';
 import { deliverGuestCreate, deliverGuestEdit } from './guestOutbound';
-import { resetTelegramGuestSessionsForTest, saveTelegramGuestSession } from './guestSession';
+import {
+  getTelegramGuestSession,
+  resetTelegramGuestSessionsForTest,
+  saveTelegramGuestSession,
+} from './guestSession';
 
 vi.mock('@/server/modules/AgentRuntime/redis', () => ({
   getAgentRuntimeRedisClient: () => null,
@@ -147,6 +151,50 @@ describe('deliverGuestCreate / deliverGuestEdit', () => {
     expect(String(fetchSpy.mock.calls[2]![0])).toContain('/editMessageCaption');
     const captionBody = JSON.parse((fetchSpy.mock.calls[2]![1] as RequestInit).body as string);
     expect(captionBody.caption).toBe('updated');
+  });
+
+  it('keeps later caption chunks visible after a photo reply hits the 1024-character limit', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(okResponse({ inline_message_id: 'inline-photo' }))
+      .mockResolvedValueOnce(okResponse({}))
+      .mockResolvedValueOnce(okResponse({}))
+      .mockResolvedValueOnce(okResponse({}));
+    await saveTelegramGuestSession(SESSION_SCOPE, THREAD_ID, { guestQueryId: 'gq-1' });
+
+    const api = new TelegramApi(BOT_TOKEN);
+    await deliverGuestCreate(api, SESSION_SCOPE, THREAD_ID, {
+      attachments: [
+        {
+          fetchUrl: 'https://cdn.example/pic.png',
+          mimeType: 'image/png',
+          type: 'image',
+        },
+      ],
+      content: 'caption',
+    });
+    await deliverGuestEdit(
+      api,
+      SESSION_SCOPE,
+      THREAD_ID,
+      'guest-inline:inline-photo',
+      'A'.repeat(1500),
+    );
+    await deliverGuestCreate(api, SESSION_SCOPE, THREAD_ID, 'VISIBLE');
+
+    const longCaption = JSON.parse((fetchSpy.mock.calls[2]![1] as RequestInit).body as string);
+    expect(String(fetchSpy.mock.calls[2]![0])).toContain('/editMessageCaption');
+    expect(longCaption.caption).toHaveLength(1024);
+    expect(longCaption.caption).toContain('1024-character');
+    expect(longCaption.caption).not.toContain('4096-character');
+
+    const appendCaption = JSON.parse((fetchSpy.mock.calls[3]![1] as RequestInit).body as string);
+    expect(String(fetchSpy.mock.calls[3]![0])).toContain('/editMessageCaption');
+    expect(appendCaption.caption).toContain('VISIBLE');
+    expect(appendCaption.caption.length).toBeLessThanOrEqual(1024);
+
+    const session = await getTelegramGuestSession(SESSION_SCOPE, THREAD_ID);
+    expect(session?.lastText).toContain('VISIBLE');
+    expect(session?.lastText?.length).toBeLessThanOrEqual(1024);
   });
 
   it('replaces an existing guest photo with a later image instead of editing text', async () => {

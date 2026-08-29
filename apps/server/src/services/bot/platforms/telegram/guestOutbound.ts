@@ -1,6 +1,6 @@
 import debug from 'debug';
 
-import { renderGuestCopy } from '../../replyTemplate';
+import { renderGuestCopy, renderGuestTruncated } from '../../replyTemplate';
 import type { BotReplyLocale } from '../const';
 import type { BotMessageAttachment, MessengerContent } from '../types';
 import { messengerContentText } from '../types';
@@ -37,10 +37,14 @@ const attachmentFallbackText = (
   return `<a href="${escapeTelegramHTML(attachment.fetchUrl)}">${label}</a>`;
 };
 
+const guestBodyLimit = (mediaType: TelegramGuestSession['mediaType']): number =>
+  mediaType === 'photo' ? TELEGRAM_CAPTION_LIMIT : TELEGRAM_TEXT_LIMIT;
+
 const prepareGuestText = (
   text: string,
   attachments: BotMessageAttachment[] | undefined,
   lng?: BotReplyLocale,
+  limit = TELEGRAM_TEXT_LIMIT,
 ): { displayText: string; storedText: string } => {
   const fallbackLines =
     attachments?.map((att, index) => attachmentFallbackText(att, index, lng)) ?? [];
@@ -49,13 +53,13 @@ const prepareGuestText = (
   if (text.trim() && fallbackText) {
     combinedText = `${text}\n\n${fallbackText}`;
   }
-  if (combinedText.length <= TELEGRAM_TEXT_LIMIT) {
+  if (combinedText.length <= limit) {
     return { displayText: combinedText, storedText: text };
   }
 
-  const truncatedNotice = `\n\n${renderGuestCopy('guestTextTruncated', lng)}`;
+  const truncatedNotice = `\n\n${renderGuestTruncated(limit, lng)}`;
   const overflowNotice = renderGuestCopy('guestAttachmentOverflow', lng);
-  const fallbackBudget = TELEGRAM_TEXT_LIMIT - truncatedNotice.length - overflowNotice.length;
+  const fallbackBudget = limit - truncatedNotice.length - overflowNotice.length;
   const includedFallbacks: string[] = [];
   for (const line of fallbackLines) {
     const candidate = [...includedFallbacks, line].join('\n');
@@ -68,7 +72,7 @@ const prepareGuestText = (
     ...(omittedAttachments ? [overflowNotice] : []),
   ].join('\n');
   const suffix = fallbackSection ? `${truncatedNotice}\n\n${fallbackSection}` : truncatedNotice;
-  const storedText = text.slice(0, TELEGRAM_TEXT_LIMIT - suffix.length);
+  const storedText = text.slice(0, Math.max(0, limit - suffix.length));
   return {
     displayText: `${storedText}${suffix}`,
     storedText,
@@ -179,7 +183,12 @@ const answerGuestQuery = async (
   text: string,
   attachments: BotMessageAttachment[] | undefined,
 ): Promise<{ id: string }> => {
-  const prepared = prepareGuestText(text, attachments, session.locale);
+  const prepared = prepareGuestText(
+    text,
+    attachments,
+    session.locale,
+    guestBodyLimit(session.mediaType),
+  );
   const { inline_message_id: inlineMessageId } = await api.answerGuestArticle(
     session.guestQueryId,
     prepared.displayText,
@@ -220,7 +229,12 @@ const editExistingGuest = async (
   ) {
     nextText = `${session.lastText}\n\n${text}`;
   }
-  const prepared = prepareGuestText(nextText, attachments, session.locale);
+  const prepared = prepareGuestText(
+    nextText,
+    attachments,
+    session.locale,
+    guestBodyLimit(session.mediaType),
+  );
   let mediaType = session.mediaType;
 
   if (canApplyMedia(attachments, nextText)) {
