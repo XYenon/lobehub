@@ -59,6 +59,27 @@ interface TelegramGuestUpdate {
  * - inbound `guest_message` updates become mentions on `telegram:guest:{chatId}`
  * - outbound `post` / `edit` on those threads use `answerGuestQuery` /
  *   `editMessageText({ inline_message_id })` instead of `sendMessage`
+ *
+ * Why this is a dedicated adapter wrapper instead of handling Guest Mode in
+ * the regular Telegram client:
+ *
+ * - We still reuse the upstream `TelegramAdapter` for every normal update and
+ *   operation through inheritance and the `super.*` fallbacks below. Keeping
+ *   that path untouched lets Chat SDK continue owning ordinary Telegram
+ *   parsing, thread IDs, sends, typing indicators, and reactions.
+ * - Guest Mode is a different Telegram transport, not just another message
+ *   subtype. Its inbound update is `guest_message`, while its first outbound
+ *   response must consume `guest_query_id` with `answerGuestQuery`. Later
+ *   chunks edit the returned `inline_message_id`; `sendMessage` cannot work
+ *   because the bot is not a member of the source chat.
+ * - Guest inline messages have no normal Telegram message payload and do not
+ *   support chat-scoped operations such as typing or reactions. They also need
+ *   bot-scoped synthetic thread/message IDs plus a short-lived session that
+ *   bridges `guest_query_id` to `inline_message_id`.
+ *
+ * Isolating those protocol exceptions here avoids forking or teaching the
+ * upstream adapter about LobeHub session state, while preserving one adapter
+ * instance and one Chat SDK dispatch pipeline for both Telegram transports.
  */
 export class LobeTelegramAdapter extends TelegramAdapter {
   private readonly sessionScope: string;
