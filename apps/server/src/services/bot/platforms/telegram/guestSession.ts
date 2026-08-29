@@ -33,6 +33,12 @@ export interface TelegramGuestSession {
    * Legacy sessions persisted before this field existed read as `0`.
    */
   savedAt?: number;
+  /**
+   * Whether an earlier body update exceeded Telegram's single-message limit.
+   * Append updates retain the truncation notice even when the stored prefix
+   * plus the new chunk would otherwise fit.
+   */
+  truncated?: boolean;
 }
 
 const TTL_SECONDS = 30 * 60;

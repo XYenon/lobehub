@@ -12,6 +12,7 @@ interface TelegramReplyToMessage {
 }
 
 interface ReferencedRaw {
+  quote?: { text?: string };
   referenced_message?: RawReferencedMessage;
   reply_to_message?: TelegramReplyToMessage;
 }
@@ -44,11 +45,19 @@ export const formatReferencedMessage = (raw: ReferencedRaw | undefined): string 
   }
 
   const telegramRef = raw?.reply_to_message;
-  if (!telegramRef) return undefined;
-  const telegramContent = telegramRef.text || telegramRef.caption;
-  if (!telegramContent) return undefined;
+  const telegramContent = telegramRef?.text || telegramRef?.caption;
+  const selectedQuote = raw?.quote?.text;
+  if (!telegramContent && !selectedQuote) return undefined;
+  const sender = telegramRef?.from?.first_name || telegramRef?.from?.username || 'unknown';
 
-  const sender = telegramRef.from?.first_name || telegramRef.from?.username || 'unknown';
+  if (selectedQuote) {
+    const fullMessage = telegramContent ? `<full_message>${telegramContent}</full_message>\n` : '';
+    return wrapReferencedMessage(
+      sender,
+      `${fullMessage}<selected_quote>${selectedQuote}</selected_quote>`,
+    );
+  }
+
   return wrapReferencedMessage(sender, telegramContent);
 };
 

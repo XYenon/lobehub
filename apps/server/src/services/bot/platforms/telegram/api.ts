@@ -805,9 +805,17 @@ export class TelegramApi {
     try {
       await send(true);
     } catch (error) {
+      const message = (error as { message?: string } | null)?.message;
+      if (message?.includes('message is not modified')) return;
       if (!caption || !isParseEntitiesError(error)) throw error;
       log('editInlineMessageMedia: caption HTML parse failed, retrying as plain text');
-      await send(false);
+      try {
+        await send(false);
+      } catch (retryError) {
+        const retryMessage = (retryError as { message?: string } | null)?.message;
+        if (retryMessage?.includes('message is not modified')) return;
+        throw retryError;
+      }
     }
   }
 

@@ -45,7 +45,9 @@ const prepareGuestText = (
   attachments: BotMessageAttachment[] | undefined,
   lng?: BotReplyLocale,
   limit = TELEGRAM_TEXT_LIMIT,
-): { displayText: string; storedText: string } => {
+  retainTruncationNotice = false,
+  retainedTailLength = 0,
+): { displayText: string; storedText: string; truncated: boolean } => {
   const fallbackLines =
     attachments?.map((att, index) => attachmentFallbackText(att, index, lng)) ?? [];
   const fallbackText = fallbackLines.join('\n');
@@ -53,8 +55,8 @@ const prepareGuestText = (
   if (text.trim() && fallbackText) {
     combinedText = `${text}\n\n${fallbackText}`;
   }
-  if (combinedText.length <= limit) {
-    return { displayText: combinedText, storedText: text };
+  if (combinedText.length <= limit && !retainTruncationNotice) {
+    return { displayText: combinedText, storedText: text, truncated: false };
   }
 
   const truncatedNotice = `\n\n${renderGuestTruncated(limit, lng)}`;
@@ -72,10 +74,16 @@ const prepareGuestText = (
     ...(omittedAttachments ? [overflowNotice] : []),
   ].join('\n');
   const suffix = fallbackSection ? `${truncatedNotice}\n\n${fallbackSection}` : truncatedNotice;
-  const storedText = text.slice(0, Math.max(0, limit - suffix.length));
+  const textBudget = Math.max(0, limit - suffix.length);
+  const tailLength = Math.min(retainedTailLength, textBudget);
+  const storedText =
+    tailLength > 0 && text.length > textBudget
+      ? `${text.slice(0, textBudget - tailLength)}${text.slice(-tailLength)}`
+      : text.slice(0, textBudget);
   return {
     displayText: `${storedText}${suffix}`,
     storedText,
+    truncated: true,
   };
 };
 
@@ -206,6 +214,7 @@ const answerGuestQuery = async (
     inlineMessageId,
     lastText: prepared.storedText,
     mediaType,
+    truncated: prepared.truncated,
   });
   return { id: encodeGuestInlineMessageId(inlineMessageId) };
 };
@@ -221,19 +230,24 @@ const editExistingGuest = async (
 ): Promise<{ id: string }> => {
   const inlineMessageId = session.inlineMessageId!;
   let nextText = text;
+  let appendedTextLength = 0;
   if (
     !options.replaceText &&
     session.lastText?.trim() &&
     text.trim() &&
     session.lastText !== text
   ) {
-    nextText = `${session.lastText}\n\n${text}`;
+    const separator = '\n\n';
+    nextText = `${session.lastText}${separator}${text}`;
+    appendedTextLength = separator.length + text.length;
   }
   const prepared = prepareGuestText(
     nextText,
     attachments,
     session.locale,
     guestBodyLimit(session.mediaType),
+    !options.replaceText && session.truncated,
+    session.truncated ? appendedTextLength : 0,
   );
   let mediaType = session.mediaType;
 
@@ -253,6 +267,7 @@ const editExistingGuest = async (
     inlineMessageId,
     lastText: prepared.storedText,
     mediaType,
+    truncated: prepared.truncated,
   });
   return { id: encodeGuestInlineMessageId(inlineMessageId) };
 };

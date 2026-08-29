@@ -287,6 +287,27 @@ describe('TelegramApi Guest Mode', () => {
     expect(body.media.caption.endsWith('...')).toBe(true);
   });
 
+  it('editInlineMessageMedia ignores not-modified', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      telegramErrorResponse(400, 'Bad Request: message is not modified'),
+    );
+
+    const api = new TelegramApi(BOT_TOKEN);
+    await expect(
+      api.editInlineMessageMedia({
+        caption: 'same',
+        inlineMessageId: 'inline-1',
+        mediaType: 'photo',
+        source: { url: 'https://cdn.example/photo.png' },
+      }),
+    ).resolves.toBeUndefined();
+
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.inline_message_id).toBe('inline-1');
+    expect(body.media.caption).toBe('same');
+    expect(body.media.type).toBe('photo');
+  });
+
   it('editInlineMessageCaption uses inline_message_id and ignores not-modified', async () => {
     fetchSpy.mockResolvedValueOnce(
       telegramErrorResponse(400, 'Bad Request: message is not modified'),
