@@ -188,7 +188,7 @@ Telegram 单条消息的文本长度上限为 **4096 字符**（实体解析后�
 
 - 推荐使用 `HTML` 模式，因为它对特殊字符的转义规则更直观。
 - `MarkdownV2` 需要对 `_`, `*`, `[`, `]`, `(`, `)`, `~`, `` ` ``, `>`, `#`, `+`, `-`, `=`, `|`, `{`, `}`, `.`, `!` 进行转义。
-- 本仓库统一使用 `HTML` 模式，并提供 `markdownToHTML` 转换工具。
+- 本仓库仅对账号绑定、配对提示等运营消息使用 HTML；Agent 内容统一使用 Rich Message Markdown。
 
 ## 4. editMessageText — 编辑消息文本
 
@@ -1157,9 +1157,8 @@ Telegram Bot API 有以下速率限制：
 | ----------------------- | ---------------------- | --------------------------------------------------------- |
 | `sendMessage`           | `sendMessage`          | `chat_id`, `text`, `parse_mode=HTML`                      |
 | `sendRichMessage`       | `sendRichMessage`      | `chat_id`, `rich_message`, optional multipart media       |
-| `sendMessageDraft`      | `sendMessageDraft`     | `chat_id`, `draft_id`, `text`, `can_stop`                 |
 | `sendRichMessageDraft`  | `sendRichMessageDraft` | `chat_id`, `draft_id`, `rich_message`, `can_stop`         |
-| `editMessageText`       | `editMessageText`      | `chat_id`, `message_id`, `text`, `parse_mode=HTML`        |
+| `editRichMessageText`   | `editMessageText`      | `chat_id`, `message_id`, `rich_message`                   |
 | `deleteMessage`         | `deleteMessage`        | `chat_id`, `message_id`                                   |
 | `sendChatAction`        | `sendChatAction`       | `chat_id`, `action=typing`                                |
 | `setMessageReaction`    | `setMessageReaction`   | `chat_id`, `message_id`, `reaction=[{type,emoji}]`        |
@@ -1236,7 +1235,8 @@ Conflict: can't use getUpdates method while webhook is active
 
 ### 18.1 Rich Message
 
-最终 Agent 回复优先使用 `sendRichMessage`。`rich_message.markdown` 保留原始 Markdown，
+最终 Agent 回复、Message Tool 和主动推送均使用 `sendRichMessage`。
+`rich_message.markdown` 保留原始 Markdown，
 因此标题、GFM 表格、任务列表和公式不再降级为 Telegram HTML。单条 Rich Markdown
 上限为 32,768 个 Unicode 字符，截断时必须闭合未完成的 Markdown 结构。
 
@@ -1252,8 +1252,9 @@ Conflict: can't use getUpdates method while webhook is active
 URL 媒体直接写入对应 `InputMedia.media`。二进制媒体使用 multipart
 `attach://file_N` 上传。视频设置 `supports_streaming: true`。
 
-若 Telegram 返回 Rich Message 方法不可用、格式错误或媒体错误，调用端回退到现有
-HTML `sendMessage` 和逐附件发送路径。Rich 请求成功后不得再次执行回退，以免重复消息。
+Rich Message 是 Agent 内容的必需能力。若 Telegram 返回方法不可用、格式错误或媒体错误，
+调用端直接报告失败，不再改用 HTML `sendMessage` 或逐附件发送，以免维护两套不同的消息语义。
+普通 `sendMessage` 仅保留给账号绑定、配对提示和其他不属于 Agent 回复的运营消息。
 
 ### 18.2 原生 Draft Streaming
 
@@ -1264,7 +1265,7 @@ HTML `sendMessage` 和逐附件发送路径。Rich 请求成功后不得再次�
 - `afterStep` 只更新同一个 Draft，不创建持久消息。
 - Draft 是临时预览，约 30 秒无更新后会消失。
 - Draft 不上传附件；媒体仅在最终持久消息中发送。
-- 完成、错误或中断后必须调用普通 `sendRichMessage`/ 回退方法发送最终消息。
+- 完成、错误或中断后必须调用 `sendRichMessage` 发送最终消息。
 
 群组、频道和 Guest Mode 不使用 Draft API，继续沿用 typing 或普通占位消息。
 
@@ -1285,7 +1286,7 @@ Session 已记录 `operationId` 时调用 `AiAgentService.interruptTask`。若 S
 
 ### 18.4 Guest Mode
 
-Guest Query 对含 Rich Markdown 或 URL 视频、音频、文档的回复使用
-`InputRichMessageContent`，后续 inline edit 使用 `editMessageText.rich_message`。
-单图和普通文本保留现有 article/media 路径；无法上传的二进制媒体和不兼容客户端
-继续降级为安全下载链接或不可用提示。
+所有 Guest Agent 回复使用 `InputRichMessageContent`，后续 inline edit 使用
+`editMessageText.rich_message`。URL 图片、视频、音频和文档直接注册为 Rich media。
+Guest Query 不能上传本地二进制附件，此类附件不再降级为 article、caption 或下载提示。
+普通 Guest article 仅保留给账号绑定等非 Agent 流程。

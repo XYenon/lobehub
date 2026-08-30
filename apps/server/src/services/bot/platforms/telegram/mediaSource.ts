@@ -1,15 +1,8 @@
-import debug from 'debug';
-
 import { loadAttachmentBuffer, MAX_IN_MEMORY_ATTACHMENT_BYTES } from '../loadAttachmentBuffer';
 import type { BotMessageAttachment } from '../types';
-import type { TelegramApi } from './api';
-
-const log = debug('bot-platform:telegram:send-attachments');
 
 /**
- * Normalized form fed into the typed `TelegramApi.send{Photo,Document,...}`
- * helpers. URL-source is preferred when available — Telegram fetches the
- * bytes server-side, saving us a round-trip + base64 inflation.
+ * Normalized media source used by Telegram Rich Messages.
  */
 export type TelegramMediaSource =
   { url: string } | { buffer: Buffer; filename: string; mimeType?: string };
@@ -104,103 +97,21 @@ export const isTelegramPlayableAudio = (att: BotMessageAttachment): boolean => {
   return dot > 0 && TELEGRAM_AUDIO_EXTENSIONS.has(name.slice(dot + 1));
 };
 
-export type TelegramMediaMethod = 'sendAudio' | 'sendDocument' | 'sendPhoto' | 'sendVideo';
+export type TelegramRichMediaType = 'audio' | 'document' | 'photo' | 'video';
 
-export const telegramMediaMethodFor = (att: BotMessageAttachment): TelegramMediaMethod => {
+export const telegramMediaTypeFor = (att: BotMessageAttachment): TelegramRichMediaType => {
   switch (att.type) {
     case 'image': {
-      return 'sendPhoto';
+      return 'photo';
     }
     case 'video': {
-      return 'sendVideo';
+      return 'video';
     }
     case 'audio': {
-      return isTelegramPlayableAudio(att) ? 'sendAudio' : 'sendDocument';
+      return isTelegramPlayableAudio(att) ? 'audio' : 'document';
     }
     default: {
-      return 'sendDocument';
+      return 'document';
     }
   }
-};
-
-const dispatch = async (
-  api: TelegramApi,
-  method: TelegramMediaMethod,
-  params: { caption?: string; chatId: string | number; source: TelegramMediaSource },
-): Promise<void> => {
-  switch (method) {
-    case 'sendPhoto': {
-      await api.sendPhoto(params);
-      return;
-    }
-    case 'sendVideo': {
-      await api.sendVideo(params);
-      return;
-    }
-    case 'sendAudio': {
-      await api.sendAudio(params);
-      return;
-    }
-    default: {
-      await api.sendDocument(params);
-    }
-  }
-};
-
-/**
- * Deliver each attachment as its own typed Telegram media call. The first
- * attachment carries `caption` (acting as the text leg of the reply); the
- * rest are caption-less so the body isn't repeated. Single-item failures
- * are logged and skipped so the rest still ship.
- *
- * Returns the number of successfully delivered attachments — callers can
- * use 0 to decide whether to fall back to a plain `sendMessage` for the
- * text leg.
- */
-export const sendTelegramAttachments = async (
-  api: TelegramApi,
-  chatId: string | number,
-  attachments: BotMessageAttachment[],
-  caption?: string,
-): Promise<number> => {
-  let delivered = 0;
-  for (const [index, att] of attachments.entries()) {
-    const source = await resolveTelegramSource(att, index);
-    if (!source) {
-      log('sendTelegramAttachments: skipping attachment without resolvable source');
-      continue;
-    }
-
-    const attemptCaption = delivered === 0 ? caption : undefined;
-    const method = telegramMediaMethodFor(att);
-    try {
-      await dispatch(api, method, { caption: attemptCaption, chatId, source });
-      delivered += 1;
-      continue;
-    } catch (error) {
-      log(
-        'sendTelegramAttachments: %s failed for %s "%s": %O',
-        method,
-        att.type,
-        att.name ?? '(unnamed)',
-        error,
-      );
-    }
-
-    // Every typed endpoint enforces format rules of its own, and each time one
-    // of them rejected us the attachment was DROPPED — the caller saw zero
-    // deliveries and the user got "push unavailable" with no file at all
-    // (.md/.csv/.pdf, then .wav, all the same shape). `sendDocument` takes
-    // arbitrary bytes, so spend one more call there before giving up.
-    if (method === 'sendDocument') continue;
-    const bytes = 'buffer' in source ? source : await uploadTelegramSource(att, index);
-    if (!bytes) continue;
-    try {
-      await api.sendDocument({ caption: attemptCaption, chatId, source: bytes });
-      delivered += 1;
-    } catch (error) {
-      log('sendTelegramAttachments: document fallback failed for "%s": %O', att.name, error);
-    }
-  }
-  return delivered;
 };

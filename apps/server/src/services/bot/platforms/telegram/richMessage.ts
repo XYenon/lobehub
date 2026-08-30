@@ -1,8 +1,8 @@
 import { StreamingMarkdownRenderer } from 'chat';
 
 import type { BotMessageAttachment } from '../types';
-import type { TelegramMediaSource } from './sendAttachments';
-import { resolveTelegramSource, telegramMediaMethodFor } from './sendAttachments';
+import type { TelegramMediaSource } from './mediaSource';
+import { resolveTelegramSource, telegramMediaTypeFor } from './mediaSource';
 
 export const TELEGRAM_RICH_MESSAGE_LIMIT = 32_768;
 
@@ -40,20 +40,7 @@ const escapeMarkdownTitle = (value: string): string =>
   value.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('\n', ' ');
 
 const richMediaTypeFor = (attachment: BotMessageAttachment): TelegramRichMediaType => {
-  switch (telegramMediaMethodFor(attachment)) {
-    case 'sendPhoto': {
-      return 'photo';
-    }
-    case 'sendVideo': {
-      return 'video';
-    }
-    case 'sendAudio': {
-      return 'audio';
-    }
-    default: {
-      return 'document';
-    }
-  }
+  return telegramMediaTypeFor(attachment);
 };
 
 const richMediaLink = (mediaType: TelegramRichMediaType, id: string, caption?: string): string => {

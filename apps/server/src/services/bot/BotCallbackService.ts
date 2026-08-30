@@ -583,17 +583,6 @@ export class BotCallbackService {
   ): Promise<boolean> {
     const payload = attachments && attachments.length > 0 ? { attachments, content: text } : text;
 
-    if (messenger.createDraft && !progressMessageId) {
-      try {
-        await messenger.createMessage(payload);
-        return true;
-      } catch (error) {
-        if (strictDelivery) throw error;
-        log('handleCompletion: native draft final delivery failed: %O', error);
-        return false;
-      }
-    }
-
     if (canEdit && progressMessageId) {
       try {
         await messenger.editMessage(progressMessageId, payload);

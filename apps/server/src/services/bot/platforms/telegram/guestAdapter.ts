@@ -4,7 +4,6 @@ import type { AdapterPostableMessage, RawMessage, WebhookOptions } from 'chat';
 import { Message } from 'chat';
 import debug from 'debug';
 
-import { normalizeBotReplyLocale } from '../const';
 import { TelegramApi } from './api';
 import { clearTelegramDraftSession, requestTelegramDraftStop } from './draftSession';
 import {
@@ -254,12 +253,8 @@ export class LobeTelegramAdapter extends TelegramAdapter {
     const guestQueryId = guestMessage.guest_query_id;
     const dispatch = async () => {
       if (guestQueryId) {
-        // Remember the summoning user's Telegram locale so Guest Mode
-        // notices (truncation / attachment fallbacks) render in their
-        // language on the first reply and every later edit.
         await initializeTelegramGuestSession(this.sessionScope, threadId, {
           guestQueryId,
-          locale: normalizeBotReplyLocale(caller?.language_code),
         });
       }
       if (!this.chat) return;

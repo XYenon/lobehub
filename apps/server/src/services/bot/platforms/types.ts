@@ -156,9 +156,6 @@ export interface BotMessageAttachment {
 export type MessengerContent = string | { attachments?: BotMessageAttachment[]; content?: string };
 
 export interface MessengerDraftContext {
-  applicationId: string;
-  messengerInstallationKey?: string;
-  platformThreadId: string;
   userId: string;
   workspaceId?: string;
 }

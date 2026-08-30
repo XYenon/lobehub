@@ -876,9 +876,6 @@ export class AgentBridgeService {
         draftId = await messenger.createDraft(
           renderStart(userMessage.text, { lng: replyLocale, timezone }),
           {
-            applicationId: botContext.applicationId,
-            messengerInstallationKey: botContext.messengerInstallationKey,
-            platformThreadId: botContext.platformThreadId,
             userId: this.userId,
             workspaceId: this.workspaceId,
           },

@@ -89,21 +89,6 @@ const isEditUnavailable = (error: unknown): boolean => {
   );
 };
 
-export const canFallbackFromTelegramRichMessage = (error: unknown): boolean => {
-  const message = (error as { message?: string } | null)?.message;
-  if (typeof message !== 'string') return false;
-  return (
-    message.includes('Telegram API sendRichMessage failed: 400') ||
-    message.includes('Telegram API sendRichMessage failed: 404') ||
-    message.includes('Telegram API sendRichMessageDraft failed: 400') ||
-    message.includes('Telegram API sendRichMessageDraft failed: 404') ||
-    message.includes('Telegram API answerGuestQuery failed: 400') ||
-    message.includes('Telegram API answerGuestQuery failed: 404') ||
-    message.includes('Telegram API editMessageText failed: 400') ||
-    message.includes('Telegram API editMessageText failed: 404')
-  );
-};
-
 /**
  * Lightweight platform client for Telegram Bot API operations used by
  * callback and extension flows outside the Chat SDK adapter surface.
@@ -132,9 +117,8 @@ export class TelegramApi {
       });
       return { message_id: data.result.message_id };
     } catch (error) {
-      // The HTML produced by markdownToTelegramHTML is best-effort — the LLM
-      // can emit content the converter can't always close cleanly. Falling
-      // back to plain text guarantees delivery instead of dropping the reply.
+      // Operational HTML can contain an unbalanced tag. Retry as plain text
+      // so account-linking and pairing prompts still reach the user.
       if (!isParseEntitiesError(error)) throw error;
       log('sendMessage: HTML parse failed, retrying as plain text. chatId=%s', chatId);
       const data = await this.call('sendMessage', {
@@ -186,24 +170,6 @@ export class TelegramApi {
     });
   }
 
-  async sendMessageDraft(params: {
-    canStop?: boolean;
-    chatId: string | number;
-    draftId: number;
-    keepOnStop?: boolean;
-    messageThreadId?: number;
-    text: string;
-  }): Promise<void> {
-    await this.call('sendMessageDraft', {
-      can_stop: params.canStop,
-      chat_id: params.chatId,
-      draft_id: params.draftId,
-      keep_on_stop: params.keepOnStop,
-      message_thread_id: params.messageThreadId,
-      text: params.text,
-    });
-  }
-
   async editRichMessageText(params: {
     chatId?: string | number;
     inlineMessageId?: string;
@@ -249,59 +215,6 @@ export class TelegramApi {
       text: this.truncateText(text),
     });
     return { message_id: data.result.message_id };
-  }
-
-  async editMessageText(chatId: string | number, messageId: number, text: string): Promise<void>;
-  async editMessageText(inlineMessageId: string, text: string): Promise<void>;
-  async editMessageText(
-    chatIdOrInlineId: string | number,
-    messageIdOrText: number | string,
-    maybeText?: string,
-  ): Promise<void> {
-    const inline = typeof messageIdOrText === 'string';
-    const text = inline ? messageIdOrText : maybeText!;
-    const location = inline
-      ? { inline_message_id: String(chatIdOrInlineId) }
-      : { chat_id: chatIdOrInlineId, message_id: messageIdOrText };
-
-    log('editMessageText: %O', location);
-    if (!text.trim()) {
-      throw new Error('Telegram API editMessageText skipped: text is empty');
-    }
-    try {
-      await this.call('editMessageText', {
-        ...location,
-        parse_mode: 'HTML',
-        text: this.truncateText(text),
-      });
-    } catch (error) {
-      const message = (error as { message?: string } | null)?.message;
-      // Telegram returns 400 when the new content is identical to the current message — safe to ignore
-      if (message?.includes('message is not modified')) return;
-      if (isParseEntitiesError(error)) {
-        log('editMessageText: HTML parse failed, retrying as plain text');
-        try {
-          await this.call('editMessageText', {
-            ...location,
-            text: this.truncateText(stripHTML(text)),
-          });
-          return;
-        } catch (retryError) {
-          if (isEditUnavailable(retryError)) {
-            throw new TelegramEditUnavailableError(
-              retryError instanceof Error ? retryError.message : String(retryError),
-            );
-          }
-          throw retryError;
-        }
-      }
-      if (isEditUnavailable(error)) {
-        throw new TelegramEditUnavailableError(
-          error instanceof Error ? error.message : String(error),
-        );
-      }
-      throw error;
-    }
   }
 
   /**
@@ -578,77 +491,6 @@ export class TelegramApi {
     }
   }
 
-  /**
-   * `multipart/form-data` variant for endpoints that take a binary upload
-   * (sendPhoto/sendDocument/...). `binaryField` names the form field that
-   * carries the file (Telegram inspects field names — `photo` for sendPhoto,
-   * `document` for sendDocument, etc.). Non-string scalars in `fields` are
-   * JSON-stringified so Telegram interprets numbers / booleans correctly.
-   */
-  private async callMultipart(
-    method: string,
-    fields: Record<string, string | number | boolean | undefined>,
-    file?: { binaryField: string; buffer: Buffer; filename: string; mimeType?: string },
-  ): Promise<any> {
-    const url = `${TELEGRAM_API_BASE}/bot${this.botToken}/${method}`;
-
-    const buildForm = (): FormData => {
-      const form = new FormData();
-      for (const [key, value] of Object.entries(fields)) {
-        if (value === undefined) continue;
-        form.append(key, typeof value === 'string' ? value : String(value));
-      }
-      if (file) {
-        const blob = new Blob([new Uint8Array(file.buffer)], {
-          type: file.mimeType ?? 'application/octet-stream',
-        });
-        form.append(file.binaryField, blob, file.filename);
-      }
-      return form;
-    };
-
-    const attempt = async (): Promise<any> => {
-      const response = await fetch(url, {
-        body: buildForm(),
-        method: 'POST',
-        // Let undici set the multipart boundary header automatically.
-        signal: AbortSignal.timeout(file ? TELEGRAM_UPLOAD_TIMEOUT_MS : TELEGRAM_FETCH_TIMEOUT_MS),
-      });
-
-      if (!response.ok) {
-        const text = await response.text();
-        log(
-          'Telegram API multipart error: method=%s, status=%d, body=%s',
-          method,
-          response.status,
-          text,
-        );
-        throw new Error(`Telegram API ${method} failed: ${response.status} ${text}`);
-      }
-
-      const data = await response.json();
-      if (data.ok === false) {
-        const desc = data.description || 'Unknown error';
-        log(
-          'Telegram API logical error: method=%s, error_code=%d, description=%s',
-          method,
-          data.error_code,
-          desc,
-        );
-        throw new Error(`Telegram API ${method} failed: ${data.error_code} ${desc}`);
-      }
-      return data;
-    };
-
-    try {
-      return await attempt();
-    } catch (error) {
-      if (!isTransientNetworkError(error)) throw error;
-      log('Telegram API %s: transient network error, retrying once: %O', method, error);
-      return await attempt();
-    }
-  }
-
   private async callMultipartMany(
     method: string,
     fields: Record<string, string | number | boolean | undefined>,
@@ -697,129 +539,6 @@ export class TelegramApi {
       log('Telegram API %s multipart: transient network error, retrying once: %O', method, error);
       return await attempt();
     }
-  }
-
-  // ==================== Outbound Media ====================
-
-  /**
-   * Send media (image/file/video/audio) on Telegram. Each media type has its
-   * own API endpoint and dedicated binary field name, so callers go through
-   * one of the typed helpers below. URL-source goes via JSON; Buffer-source
-   * goes via multipart/form-data.
-   */
-  private async sendMedia(
-    method: 'sendPhoto' | 'sendDocument' | 'sendVideo' | 'sendAudio',
-    binaryField: 'photo' | 'document' | 'video' | 'audio',
-    params: {
-      caption?: string;
-      chatId: string | number;
-      /** Method-specific scalars (e.g. `supports_streaming` on sendVideo). */
-      extraFields?: Record<string, boolean | number | string | undefined>;
-      source: { url: string } | { buffer: Buffer; filename: string; mimeType?: string };
-    },
-  ): Promise<{ message_id: number }> {
-    const caption = params.caption ? this.truncateCaption(params.caption) : undefined;
-
-    // Captions render as HTML so links/formatting survive — but the LLM/user
-    // content can contain unbalanced or stray `<`,`>`,`&`. Without this
-    // fallback the whole attachment send fails and the message degrades to
-    // text-only delivery; mirror the sendMessage retry-as-plain-text path.
-    const send = (useHtml: boolean): Promise<any> => {
-      const captionForSend =
-        caption && !useHtml ? this.truncateCaption(stripHTML(caption)) : caption;
-
-      if ('url' in params.source) {
-        return this.call(method, {
-          ...params.extraFields,
-          caption: captionForSend,
-          chat_id: params.chatId,
-          parse_mode: captionForSend && useHtml ? 'HTML' : undefined,
-          [binaryField]: params.source.url,
-        });
-      }
-
-      return this.callMultipart(
-        method,
-        {
-          ...params.extraFields,
-          caption: captionForSend,
-          chat_id: params.chatId,
-          parse_mode: captionForSend && useHtml ? 'HTML' : undefined,
-        },
-        {
-          binaryField,
-          buffer: params.source.buffer,
-          filename: params.source.filename,
-          mimeType: params.source.mimeType,
-        },
-      );
-    };
-
-    try {
-      const data = await send(true);
-      return { message_id: data.result.message_id };
-    } catch (error) {
-      if (!caption || !isParseEntitiesError(error)) throw error;
-      log(
-        '%s: caption HTML parse failed, retrying as plain text. chatId=%s',
-        method,
-        params.chatId,
-      );
-      const data = await send(false);
-      return { message_id: data.result.message_id };
-    }
-  }
-
-  async sendPhoto(params: {
-    caption?: string;
-    chatId: string | number;
-    source: { url: string } | { buffer: Buffer; filename: string; mimeType?: string };
-  }): Promise<{ message_id: number }> {
-    log('sendPhoto: chatId=%s', params.chatId);
-    return this.sendMedia('sendPhoto', 'photo', params);
-  }
-
-  async sendDocument(params: {
-    caption?: string;
-    chatId: string | number;
-    source: { url: string } | { buffer: Buffer; filename: string; mimeType?: string };
-  }): Promise<{ message_id: number }> {
-    log('sendDocument: chatId=%s', params.chatId);
-    return this.sendMedia('sendDocument', 'document', params);
-  }
-
-  /**
-   * `supports_streaming` is always on: it is what makes clients render a
-   * seekable player instead of a download-then-play blob, and every MP4 we
-   * forward is already a progressive file.
-   *
-   * NOTE it does NOT stop Telegram from rendering a SOUNDLESS MP4 as an
-   * animation (the "GIF" badge). That classification happens server-side from
-   * the absence of an audio stream, and no Bot API parameter overrides it —
-   * `sendDocument` re-detects the content type just the same, and only
-   * `disable_content_type_detection` escapes it, at the cost of losing inline
-   * playback entirely. Adding a silent audio track is the only real fix and
-   * needs ffmpeg, which this path deliberately does not carry.
-   */
-  async sendVideo(params: {
-    caption?: string;
-    chatId: string | number;
-    source: { url: string } | { buffer: Buffer; filename: string; mimeType?: string };
-  }): Promise<{ message_id: number }> {
-    log('sendVideo: chatId=%s', params.chatId);
-    return this.sendMedia('sendVideo', 'video', {
-      ...params,
-      extraFields: { supports_streaming: true },
-    });
-  }
-
-  async sendAudio(params: {
-    caption?: string;
-    chatId: string | number;
-    source: { url: string } | { buffer: Buffer; filename: string; mimeType?: string };
-  }): Promise<{ message_id: number }> {
-    log('sendAudio: chatId=%s', params.chatId);
-    return this.sendMedia('sendAudio', 'audio', params);
   }
 
   // ==================== Guest Mode ====================
@@ -887,109 +606,5 @@ export class TelegramApi {
       title: extra?.title ?? 'LobeHub',
       type: 'article',
     });
-  }
-
-  /**
-   * Update the caption of a guest inline media message. Telegram cannot convert
-   * a photo back into a text message, so later text-only Guest Mode edits go
-   * here once `editMessageMedia` has succeeded.
-   */
-  async editInlineMessageCaption(params: {
-    caption: string;
-    inlineMessageId: string;
-  }): Promise<void> {
-    log('editInlineMessageCaption');
-    const caption = this.truncateCaption(params.caption);
-
-    const send = (useHtml: boolean): Promise<unknown> => {
-      const captionForSend = useHtml ? caption : this.truncateCaption(stripHTML(caption));
-      return this.call('editMessageCaption', {
-        caption: captionForSend,
-        inline_message_id: params.inlineMessageId,
-        parse_mode: captionForSend && useHtml ? 'HTML' : undefined,
-      });
-    };
-
-    try {
-      await send(true);
-    } catch (error) {
-      const message = (error as { message?: string } | null)?.message;
-      if (message?.includes('message is not modified')) return;
-      if (isParseEntitiesError(error)) {
-        log('editInlineMessageCaption: HTML parse failed, retrying as plain text');
-        try {
-          await send(false);
-          return;
-        } catch (retryError) {
-          if (isEditUnavailable(retryError)) {
-            throw new TelegramEditUnavailableError(
-              retryError instanceof Error ? retryError.message : String(retryError),
-            );
-          }
-          throw retryError;
-        }
-      }
-      if (isEditUnavailable(error)) {
-        throw new TelegramEditUnavailableError(
-          error instanceof Error ? error.message : String(error),
-        );
-      }
-      throw error;
-    }
-  }
-
-  /**
-   * Replace a guest inline message with media. Used so Guest Mode can still
-   * deliver photos/files after the query was answered with a text placeholder.
-   */
-  async editInlineMessageMedia(params: {
-    caption?: string;
-    inlineMessageId: string;
-    mediaType: 'audio' | 'document' | 'photo' | 'video';
-    source: { url: string };
-  }): Promise<void> {
-    log('editInlineMessageMedia: type=%s', params.mediaType);
-    const caption = params.caption ? this.truncateCaption(params.caption) : undefined;
-
-    const send = (useHtml: boolean): Promise<unknown> => {
-      const captionForSend =
-        caption && !useHtml ? this.truncateCaption(stripHTML(caption)) : caption;
-      const media: Record<string, unknown> = {
-        caption: captionForSend,
-        media: params.source.url,
-        parse_mode: captionForSend && useHtml ? 'HTML' : undefined,
-        type: params.mediaType,
-      };
-
-      return this.call('editMessageMedia', {
-        inline_message_id: params.inlineMessageId,
-        media,
-      });
-    };
-
-    try {
-      await send(true);
-    } catch (error) {
-      const message = (error as { message?: string } | null)?.message;
-      if (message?.includes('message is not modified')) return;
-      if (!caption || !isParseEntitiesError(error)) throw error;
-      log('editInlineMessageMedia: caption HTML parse failed, retrying as plain text');
-      try {
-        await send(false);
-      } catch (retryError) {
-        const retryMessage = (retryError as { message?: string } | null)?.message;
-        if (retryMessage?.includes('message is not modified')) return;
-        throw retryError;
-      }
-    }
-  }
-
-  /**
-   * Telegram caption limit is 1024 characters (vs. 4096 for sendMessage).
-   * Truncate with an ellipsis instead of letting the API reject the call.
-   */
-  private truncateCaption(text: string): string {
-    if (text.length > 1024) return text.slice(0, 1021) + '...';
-    return text;
   }
 }

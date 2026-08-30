@@ -548,29 +548,25 @@ describe('TelegramWebhookClient rich messenger', () => {
     expect(body.rich_message.markdown).toContain('| A | B |');
   });
 
-  it('falls back to the legacy HTML message when Rich Messages are unavailable', async () => {
-    const fetchSpy = vi
-      .spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            description: 'Bad Request: method is not available',
-            error_code: 400,
-            ok: false,
-          }),
-          { headers: { 'Content-Type': 'application/json' }, status: 200 },
-        ),
-      )
-      .mockResolvedValueOnce(okResponse({ message_id: 13 }));
+  it('does not fall back when Rich Messages are unavailable', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          description: 'Bad Request: method is not available',
+          error_code: 400,
+          ok: false,
+        }),
+        { headers: { 'Content-Type': 'application/json' }, status: 200 },
+      ),
+    );
     const messenger = createClient().getMessenger('telegram:7');
 
-    await messenger.createMessage('**Fallback**');
+    await expect(messenger.createMessage('**Required**')).rejects.toThrow(
+      'method is not available',
+    );
 
     expect(String(fetchSpy.mock.calls[0]![0])).toContain('/sendRichMessage');
-    expect(String(fetchSpy.mock.calls[1]![0])).toContain('/sendMessage');
-    const fallbackBody = JSON.parse((fetchSpy.mock.calls[1]![1] as RequestInit).body as string);
-    expect(fallbackBody.parse_mode).toBe('HTML');
-    expect(fallbackBody.text).toContain('<b>Fallback</b>');
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it('creates and updates a native private-chat draft', async () => {
@@ -579,8 +575,6 @@ describe('TelegramWebhookClient rich messenger', () => {
     const messenger = client.getMessenger('telegram:7');
 
     const draftId = await messenger.createDraft?.('Thinking…', {
-      applicationId: client.applicationId,
-      platformThreadId: 'telegram:7',
       userId: 'user-1',
     });
     await messenger.updateDraft?.(draftId!, 'Using a tool…');
@@ -594,31 +588,28 @@ describe('TelegramWebhookClient rich messenger', () => {
     expect(secondBody.rich_message.markdown).toBe('Using a tool…');
   });
 
-  it('falls back from a rich draft to sendMessageDraft', async () => {
-    const fetchSpy = vi
-      .spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            description: 'Bad Request: method is not available',
-            error_code: 400,
-            ok: false,
-          }),
-          { headers: { 'Content-Type': 'application/json' }, status: 200 },
-        ),
-      )
-      .mockResolvedValueOnce(okResponse({}));
+  it('does not fall back when Rich Drafts are unavailable', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          description: 'Bad Request: method is not available',
+          error_code: 400,
+          ok: false,
+        }),
+        { headers: { 'Content-Type': 'application/json' }, status: 200 },
+      ),
+    );
     const client = createClient();
     const messenger = client.getMessenger('telegram:7');
 
-    await messenger.createDraft?.('Thinking…', {
-      applicationId: client.applicationId,
-      platformThreadId: 'telegram:7',
-      userId: 'user-1',
-    });
+    await expect(
+      messenger.createDraft?.('Thinking…', {
+        userId: 'user-1',
+      }),
+    ).rejects.toThrow('method is not available');
 
     expect(String(fetchSpy.mock.calls[0]![0])).toContain('/sendRichMessageDraft');
-    expect(String(fetchSpy.mock.calls[1]![0])).toContain('/sendMessageDraft');
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it('does not expose native drafts for group chats', () => {

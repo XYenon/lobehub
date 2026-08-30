@@ -3,7 +3,6 @@ import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis'
 export interface TelegramDraftSession {
   applicationId: string;
   draftId: number;
-  messengerInstallationKey?: string;
   operationId?: string;
   platformThreadId: string;
   savedAt?: number;

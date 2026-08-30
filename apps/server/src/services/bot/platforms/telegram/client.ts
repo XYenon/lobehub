@@ -20,7 +20,7 @@ import {
   type ValidationResult,
 } from '../types';
 import { formatUsageStats } from '../utils';
-import { canFallbackFromTelegramRichMessage, TELEGRAM_API_BASE, TelegramApi } from './api';
+import { TELEGRAM_API_BASE, TelegramApi } from './api';
 import {
   clearTelegramDraftSession,
   saveTelegramDraftSession,
@@ -29,10 +29,7 @@ import {
 import { createLobeTelegramAdapter } from './guestAdapter';
 import { deliverGuestCreate, deliverGuestEdit } from './guestOutbound';
 import { extractBotId, setTelegramWebhook } from './helpers';
-import { markdownToTelegramHTML } from './markdownToHTML';
-import type { PreparedTelegramRichMessage } from './richMessage';
 import { prepareTelegramRichMessage, truncateTelegramRichMarkdown } from './richMessage';
-import { sendTelegramAttachments } from './sendAttachments';
 import { isGuestTelegramThreadId, parseTelegramThreadId } from './threadId';
 
 const log = debug('bot-platform:telegram:bot');
@@ -265,54 +262,25 @@ class TelegramWebhookClient implements PlatformClient {
       createMessage: async (content) => {
         const text = messengerContentText(content);
         const attachments = typeof content === 'string' ? undefined : content.attachments;
-        let prepared: PreparedTelegramRichMessage | undefined;
-        try {
-          prepared = await prepareTelegramRichMessage(text, attachments);
-        } catch (error) {
-          log('createMessage: failed to prepare rich media, falling back: %O', error);
-        }
-        if (prepared?.richMessage.markdown.trim()) {
-          try {
-            await telegram.sendRichMessage({
-              chatId,
-              messageThreadId: parsedThread.messageThreadId,
-              richMessage: prepared.richMessage,
-              uploads: prepared.uploads,
-            });
-            return;
-          } catch (error) {
-            if (!canFallbackFromTelegramRichMessage(error)) throw error;
-            log('createMessage: rich message unavailable, falling back: %O', error);
-          }
-        }
-        const html = markdownToTelegramHTML(text);
-        if (attachments?.length) {
-          const delivered = await sendTelegramAttachments(telegram, chatId, attachments, html);
-          if (delivered > 0) return;
-        }
-        if (html.trim()) {
-          await telegram.sendMessage(chatId, html);
-        }
+        const prepared = await prepareTelegramRichMessage(text, attachments);
+        if (!prepared.richMessage.markdown.trim()) return;
+        await telegram.sendRichMessage({
+          chatId,
+          messageThreadId: parsedThread.messageThreadId,
+          richMessage: prepared.richMessage,
+          uploads: prepared.uploads,
+        });
       },
       // editMessage keeps the text-only contract. Telegram doesn't support
       // converting a text message into a media message — new chunks with
       // attachments flow through createMessage instead.
       editMessage: async (messageId, content) => {
         const text = messengerContentText(content);
-        try {
-          await telegram.editRichMessageText({
-            chatId,
-            messageId: parseTelegramMessageId(messageId),
-            richMessage: { markdown: truncateTelegramRichMarkdown(text) },
-          });
-        } catch (error) {
-          if (!canFallbackFromTelegramRichMessage(error)) throw error;
-          await telegram.editMessageText(
-            chatId,
-            parseTelegramMessageId(messageId),
-            markdownToTelegramHTML(text),
-          );
-        }
+        await telegram.editRichMessageText({
+          chatId,
+          messageId: parseTelegramMessageId(messageId),
+          richMessage: { markdown: truncateTelegramRichMarkdown(text) },
+        });
       },
       removeReaction: (messageId) =>
         telegram.removeMessageReaction(chatId, parseTelegramMessageId(messageId)),
@@ -329,51 +297,30 @@ class TelegramWebhookClient implements PlatformClient {
       messenger.createDraft = async (content, context) => {
         const draftId = Math.floor(Math.random() * 2_147_483_646) + 1;
         const richMessage = { markdown: truncateTelegramRichMarkdown(content) };
-        try {
-          await telegram.sendRichMessageDraft({
-            canStop: true,
-            chatId,
-            draftId,
-            messageThreadId: parsedThread.messageThreadId,
-            richMessage,
-          });
-        } catch (error) {
-          if (!canFallbackFromTelegramRichMessage(error)) throw error;
-          await telegram.sendMessageDraft({
-            canStop: true,
-            chatId,
-            draftId,
-            messageThreadId: parsedThread.messageThreadId,
-            text: content,
-          });
-        }
+        await telegram.sendRichMessageDraft({
+          canStop: true,
+          chatId,
+          draftId,
+          messageThreadId: parsedThread.messageThreadId,
+          richMessage,
+        });
         await saveTelegramDraftSession({
           ...context,
           applicationId: this.applicationId,
           draftId,
+          platformThreadId,
         });
         return String(draftId);
       };
       messenger.updateDraft = async (draftId, content) => {
         const numericDraftId = Number(draftId);
-        try {
-          await telegram.sendRichMessageDraft({
-            canStop: true,
-            chatId,
-            draftId: numericDraftId,
-            messageThreadId: parsedThread.messageThreadId,
-            richMessage: { markdown: truncateTelegramRichMarkdown(content) },
-          });
-        } catch (error) {
-          if (!canFallbackFromTelegramRichMessage(error)) throw error;
-          await telegram.sendMessageDraft({
-            canStop: true,
-            chatId,
-            draftId: numericDraftId,
-            messageThreadId: parsedThread.messageThreadId,
-            text: content,
-          });
-        }
+        await telegram.sendRichMessageDraft({
+          canStop: true,
+          chatId,
+          draftId: numericDraftId,
+          messageThreadId: parsedThread.messageThreadId,
+          richMessage: { markdown: truncateTelegramRichMarkdown(content) },
+        });
       };
       messenger.setDraftOperation = (draftId, operationId) =>
         setTelegramDraftOperation(
@@ -552,10 +499,6 @@ class TelegramWebhookClient implements PlatformClient {
         return undefined;
       }
     }
-  }
-
-  formatMarkdown(markdown: string): string {
-    return markdown;
   }
 
   formatReply(body: string, stats?: UsageStats): string {

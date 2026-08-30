@@ -1,7 +1,5 @@
 import { getAgentRuntimeRedisClient } from '@/server/modules/AgentRuntime/redis';
 
-import type { BotReplyLocale } from '../const';
-
 /**
  * Cross-process Guest Mode reply state. The first outbound call answers the
  * guest query; later edits (queue-mode callbacks in a fresh isolate) need the
@@ -15,30 +13,11 @@ export interface TelegramGuestSession {
   inlineMessageId?: string;
   lastText?: string;
   /**
-   * Reply locale derived from the summoning user's Telegram `language_code`.
-   * Persisted alongside the session so later edits (possibly in another
-   * process via the callback isolate) localize Guest Mode notices the same
-   * way as the first reply.
-   */
-  locale?: BotReplyLocale;
-  /**
-   * Kind of the current inline message after a successful `editMessageMedia`.
-   * Telegram cannot convert a photo back into a text message, so later
-   * text-only edits must use `editMessageCaption` instead of `editMessageText`.
-   */
-  mediaType?: 'photo';
-  /**
    * Write timestamp (ms). Used to pick the newer copy when a failed Redis
    * `set` leaves Redis holding an older session than in-process memory.
    * Legacy sessions persisted before this field existed read as `0`.
    */
   savedAt?: number;
-  /**
-   * Whether an earlier body update exceeded Telegram's single-message limit.
-   * Append updates retain the truncation notice even when the stored prefix
-   * plus the new chunk would otherwise fit.
-   */
-  truncated?: boolean;
 }
 
 const TTL_SECONDS = 30 * 60;
@@ -105,7 +84,7 @@ export async function saveTelegramGuestSession(
 export async function initializeTelegramGuestSession(
   sessionScope: string,
   threadId: string,
-  session: Pick<TelegramGuestSession, 'guestQueryId' | 'locale'>,
+  session: Pick<TelegramGuestSession, 'guestQueryId'>,
 ): Promise<void> {
   const key = buildKey(sessionScope, threadId);
   if (readMemory(key)) return;

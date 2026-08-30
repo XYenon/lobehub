@@ -214,44 +214,6 @@ describe('LobeTelegramAdapter Guest Mode', () => {
     );
   });
 
-  it('captures the summoning user locale into the guest session', async () => {
-    mockGetMe();
-    const adapter = createGuestAdapter('bot-1');
-
-    const bot = new Chat({
-      adapters: { telegram: adapter },
-      state: createMemoryState() as never,
-      userName: 'mybot',
-    });
-    bot.onNewMention(async () => {});
-    await bot.initialize();
-
-    processUpdate(adapter, {
-      guest_message: {
-        chat: { id: -100123, title: 'Room', type: 'supergroup' },
-        date: 1,
-        guest_bot_caller_user: {
-          first_name: 'Ada',
-          id: 7,
-          is_bot: false,
-          language_code: 'zh-hans',
-        },
-        guest_query_id: 'gq-locale',
-        message_id: 13,
-        text: '@mybot 你好',
-      },
-      update_id: 3,
-    });
-
-    await vi.waitFor(async () => {
-      const session = await getTelegramGuestSession(
-        'bot-1',
-        'telegram:guest:-100123:bot:bot-1:message:13',
-      );
-      expect(session).toMatchObject({ guestQueryId: 'gq-locale', locale: 'zh-CN' });
-    });
-  });
-
   it('preserves outbound session state when Telegram redelivers a guest update', async () => {
     mockGetMe();
     const adapter = createGuestAdapter('bot-1');
@@ -286,8 +248,7 @@ describe('LobeTelegramAdapter Guest Mode', () => {
     await saveTelegramGuestSession('bot-1', threadId, {
       guestQueryId: 'gq-duplicate',
       inlineMessageId: 'inline-14',
-      lastText: 'photo reply',
-      mediaType: 'photo',
+      lastText: 'rich reply',
     });
 
     processUpdate(adapter, update);
@@ -296,8 +257,7 @@ describe('LobeTelegramAdapter Guest Mode', () => {
     expect(mentions).toHaveLength(1);
     await expect(getTelegramGuestSession('bot-1', threadId)).resolves.toMatchObject({
       inlineMessageId: 'inline-14',
-      lastText: 'photo reply',
-      mediaType: 'photo',
+      lastText: 'rich reply',
     });
   });
 
