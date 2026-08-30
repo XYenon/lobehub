@@ -23,6 +23,7 @@ export const TELEGRAM_ALLOWED_UPDATES = [
   'callback_query',
   'message_reaction',
   'guest_message',
+  'stopped_message_generation',
 ] as const;
 
 /**

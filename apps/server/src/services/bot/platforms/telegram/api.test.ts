@@ -162,6 +162,64 @@ describe('TelegramApi HTML parse fallback', () => {
     expect(TELEGRAM_API_BASE).toBe('https://api.telegram.org');
   });
 
+  it('sends rich messages with multiple multipart attachments', async () => {
+    fetchSpy.mockResolvedValueOnce(okResponse({ message_id: 88 }));
+    const api = new TelegramApi(BOT_TOKEN);
+
+    await api.sendRichMessage({
+      chatId: 'chat-1',
+      richMessage: {
+        markdown: 'Files',
+        media: [
+          { id: 'media_0', media: { media: 'attach://file_0', type: 'document' } },
+          { id: 'media_1', media: { media: 'attach://file_1', type: 'photo' } },
+        ],
+      },
+      uploads: [
+        {
+          buffer: Buffer.from('one'),
+          fieldName: 'file_0',
+          filename: 'one.pdf',
+          mimeType: 'application/pdf',
+        },
+        {
+          buffer: Buffer.from('two'),
+          fieldName: 'file_1',
+          filename: 'two.png',
+          mimeType: 'image/png',
+        },
+      ],
+    });
+
+    expect(String(fetchSpy.mock.calls[0][0])).toContain('/sendRichMessage');
+    const form = (fetchSpy.mock.calls[0][1] as RequestInit).body as FormData;
+    expect(form.get('chat_id')).toBe('chat-1');
+    expect(form.get('file_0')).toBeInstanceOf(Blob);
+    expect(form.get('file_1')).toBeInstanceOf(Blob);
+    expect(JSON.parse(String(form.get('rich_message'))).media).toHaveLength(2);
+  });
+
+  it('sends stoppable rich drafts with a stable draft id', async () => {
+    fetchSpy.mockResolvedValueOnce(okResponse({}));
+    const api = new TelegramApi(BOT_TOKEN);
+
+    await api.sendRichMessageDraft({
+      canStop: true,
+      chatId: 7,
+      draftId: 42,
+      richMessage: { markdown: '**Thinking…**' },
+    });
+
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    expect(String(fetchSpy.mock.calls[0][0])).toContain('/sendRichMessageDraft');
+    expect(body).toMatchObject({
+      can_stop: true,
+      chat_id: 7,
+      draft_id: 42,
+      rich_message: { markdown: '**Thinking…**' },
+    });
+  });
+
   it('sendMessage refuses to call Telegram with empty text', async () => {
     const api = new TelegramApi(BOT_TOKEN);
     await expect(api.sendMessage('chat-1', '   \n\n  ')).rejects.toThrow(/text is empty/);

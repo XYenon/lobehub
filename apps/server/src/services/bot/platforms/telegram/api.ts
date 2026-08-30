@@ -1,5 +1,7 @@
 import debug from 'debug';
 
+import type { TelegramInputRichMessage, TelegramRichUpload } from './richMessage';
+
 const log = debug('bot-platform:telegram:client');
 
 export const TELEGRAM_API_BASE = 'https://api.telegram.org';
@@ -87,6 +89,21 @@ const isEditUnavailable = (error: unknown): boolean => {
   );
 };
 
+export const canFallbackFromTelegramRichMessage = (error: unknown): boolean => {
+  const message = (error as { message?: string } | null)?.message;
+  if (typeof message !== 'string') return false;
+  return (
+    message.includes('Telegram API sendRichMessage failed: 400') ||
+    message.includes('Telegram API sendRichMessage failed: 404') ||
+    message.includes('Telegram API sendRichMessageDraft failed: 400') ||
+    message.includes('Telegram API sendRichMessageDraft failed: 404') ||
+    message.includes('Telegram API answerGuestQuery failed: 400') ||
+    message.includes('Telegram API answerGuestQuery failed: 404') ||
+    message.includes('Telegram API editMessageText failed: 400') ||
+    message.includes('Telegram API editMessageText failed: 404')
+  );
+};
+
 /**
  * Lightweight platform client for Telegram Bot API operations used by
  * callback and extension flows outside the Chat SDK adapter surface.
@@ -125,6 +142,90 @@ export class TelegramApi {
         text: this.truncateText(stripHTML(text)),
       });
       return { message_id: data.result.message_id };
+    }
+  }
+
+  async sendRichMessage(params: {
+    chatId: string | number;
+    messageThreadId?: number;
+    richMessage: TelegramInputRichMessage;
+    uploads?: TelegramRichUpload[];
+  }): Promise<{ message_id: number }> {
+    log('sendRichMessage: chatId=%s, uploads=%d', params.chatId, params.uploads?.length ?? 0);
+    const fields = {
+      chat_id: params.chatId,
+      message_thread_id: params.messageThreadId,
+      rich_message: JSON.stringify(params.richMessage),
+    };
+    const data = params.uploads?.length
+      ? await this.callMultipartMany('sendRichMessage', fields, params.uploads)
+      : await this.call('sendRichMessage', {
+          chat_id: params.chatId,
+          message_thread_id: params.messageThreadId,
+          rich_message: params.richMessage,
+        });
+    return { message_id: data.result.message_id };
+  }
+
+  async sendRichMessageDraft(params: {
+    canStop?: boolean;
+    chatId: string | number;
+    draftId: number;
+    keepOnStop?: boolean;
+    messageThreadId?: number;
+    richMessage: TelegramInputRichMessage;
+  }): Promise<void> {
+    log('sendRichMessageDraft: chatId=%s, draftId=%d', params.chatId, params.draftId);
+    await this.call('sendRichMessageDraft', {
+      can_stop: params.canStop,
+      chat_id: params.chatId,
+      draft_id: params.draftId,
+      keep_on_stop: params.keepOnStop,
+      message_thread_id: params.messageThreadId,
+      rich_message: params.richMessage,
+    });
+  }
+
+  async sendMessageDraft(params: {
+    canStop?: boolean;
+    chatId: string | number;
+    draftId: number;
+    keepOnStop?: boolean;
+    messageThreadId?: number;
+    text: string;
+  }): Promise<void> {
+    await this.call('sendMessageDraft', {
+      can_stop: params.canStop,
+      chat_id: params.chatId,
+      draft_id: params.draftId,
+      keep_on_stop: params.keepOnStop,
+      message_thread_id: params.messageThreadId,
+      text: params.text,
+    });
+  }
+
+  async editRichMessageText(params: {
+    chatId?: string | number;
+    inlineMessageId?: string;
+    messageId?: number;
+    richMessage: TelegramInputRichMessage;
+  }): Promise<void> {
+    try {
+      await this.call('editMessageText', {
+        chat_id: params.chatId,
+        inline_message_id: params.inlineMessageId,
+        message_id: params.messageId,
+        rich_message: params.richMessage,
+      });
+    } catch (error) {
+      const message = (error as { message?: string } | null)?.message;
+      if (message?.includes('message is not modified')) return;
+      if (isEditUnavailable(error)) {
+        throw new TelegramEditUnavailableError(
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+      throw error;
     }
   }
 
@@ -548,6 +649,56 @@ export class TelegramApi {
     }
   }
 
+  private async callMultipartMany(
+    method: string,
+    fields: Record<string, string | number | boolean | undefined>,
+    files: TelegramRichUpload[],
+  ): Promise<any> {
+    const url = `${TELEGRAM_API_BASE}/bot${this.botToken}/${method}`;
+
+    const buildForm = (): FormData => {
+      const form = new FormData();
+      for (const [key, value] of Object.entries(fields)) {
+        if (value === undefined) continue;
+        form.append(key, String(value));
+      }
+      for (const file of files) {
+        const blob = new Blob([new Uint8Array(file.buffer)], {
+          type: file.mimeType ?? 'application/octet-stream',
+        });
+        form.append(file.fieldName, blob, file.filename);
+      }
+      return form;
+    };
+
+    const attempt = async (): Promise<any> => {
+      const response = await fetch(url, {
+        body: buildForm(),
+        method: 'POST',
+        signal: AbortSignal.timeout(TELEGRAM_UPLOAD_TIMEOUT_MS),
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`Telegram API ${method} failed: ${response.status} ${text}`);
+      }
+      const data = await response.json();
+      if (data.ok === false) {
+        throw new Error(
+          `Telegram API ${method} failed: ${data.error_code} ${data.description || 'Unknown error'}`,
+        );
+      }
+      return data;
+    };
+
+    try {
+      return await attempt();
+    } catch (error) {
+      if (!isTransientNetworkError(error)) throw error;
+      log('Telegram API %s multipart: transient network error, retrying once: %O', method, error);
+      return await attempt();
+    }
+  }
+
   // ==================== Outbound Media ====================
 
   /**
@@ -722,6 +873,20 @@ export class TelegramApi {
       log('answerGuestArticle: HTML parse failed, retrying as plain text');
       return this.answerGuestQuery(guestQueryId, build(false, this.truncateText(stripHTML(body))));
     }
+  }
+
+  async answerGuestRichArticle(
+    guestQueryId: string,
+    richMessage: TelegramInputRichMessage,
+    extra?: { replyMarkup?: unknown; title?: string },
+  ): Promise<{ inline_message_id: string }> {
+    return this.answerGuestQuery(guestQueryId, {
+      id: 'guest-reply',
+      input_message_content: { rich_message: richMessage },
+      reply_markup: extra?.replyMarkup,
+      title: extra?.title ?? 'LobeHub',
+      type: 'article',
+    });
   }
 
   /**

@@ -1,6 +1,11 @@
 import { Chat } from 'chat';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  getTelegramDraftSession,
+  resetTelegramDraftSessionsForTest,
+  saveTelegramDraftSession,
+} from './draftSession';
 import { LobeTelegramAdapter } from './guestAdapter';
 import {
   getTelegramGuestSession,
@@ -81,6 +86,7 @@ const createMemoryState = () => {
 };
 
 afterEach(() => {
+  resetTelegramDraftSessionsForTest();
   resetTelegramGuestSessionsForTest();
   vi.restoreAllMocks();
 });
@@ -322,5 +328,29 @@ describe('LobeTelegramAdapter Guest Mode', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(mentions).toEqual([]);
+  });
+
+  it('records a scoped early stop request for a native draft', async () => {
+    const adapter = createGuestAdapter('bot-1');
+    await saveTelegramDraftSession({
+      applicationId: 'bot-1',
+      draftId: 42,
+      platformThreadId: 'telegram:7',
+      userId: 'user-1',
+    });
+
+    processUpdate(adapter, {
+      stopped_message_generation: {
+        chat: { id: 7, type: 'private' },
+        draft_id: 42,
+      },
+      update_id: 5,
+    });
+
+    await vi.waitFor(async () => {
+      await expect(getTelegramDraftSession('bot-1', 'telegram:7', 42)).resolves.toMatchObject({
+        stopRequested: true,
+      });
+    });
   });
 });

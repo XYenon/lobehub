@@ -6,6 +6,7 @@ import debug from 'debug';
 
 import { normalizeBotReplyLocale } from '../const';
 import { TelegramApi } from './api';
+import { clearTelegramDraftSession, requestTelegramDraftStop } from './draftSession';
 import {
   deliverGuestCreate,
   deliverGuestEdit,
@@ -51,6 +52,11 @@ interface TelegramGuestMessage {
 
 interface TelegramGuestUpdate {
   guest_message?: TelegramGuestMessage;
+  stopped_message_generation?: {
+    chat: TelegramGuestChat;
+    draft_id: number;
+    message_thread_id?: number;
+  };
 }
 
 /**
@@ -90,7 +96,20 @@ export class LobeTelegramAdapter extends TelegramAdapter {
   }
 
   protected override processUpdate(update: unknown, options?: WebhookOptions): void {
-    const guestMessage = (update as TelegramGuestUpdate).guest_message;
+    const telegramUpdate = update as TelegramGuestUpdate;
+    const stopped = telegramUpdate.stopped_message_generation;
+    if (stopped) {
+      const threadId = ['telegram', String(stopped.chat.id), stopped.message_thread_id]
+        .filter((part) => part !== undefined)
+        .join(':');
+      const task = this.handleStoppedGeneration(threadId, stopped.draft_id).catch((error) => {
+        log('failed to stop Telegram draft generation: %O', error);
+      });
+      options?.waitUntil?.(task);
+      return;
+    }
+
+    const guestMessage = telegramUpdate.guest_message;
     if (guestMessage) {
       const senderId = guestMessage.guest_bot_caller_user?.id ?? guestMessage.from?.id;
       if (
@@ -103,6 +122,27 @@ export class LobeTelegramAdapter extends TelegramAdapter {
       return;
     }
     super.processUpdate(update as never, options);
+  }
+
+  private async handleStoppedGeneration(threadId: string, draftId: number): Promise<void> {
+    const session = await requestTelegramDraftStop(this.sessionScope, threadId, draftId);
+    if (!session) return;
+
+    if (!session.operationId) return;
+
+    const [{ getServerDB }, { AiAgentService }] = await Promise.all([
+      import('@/database/core/db-adaptor'),
+      import('@/server/services/aiAgent'),
+    ]);
+    const db = await getServerDB();
+    const service = new AiAgentService(db, session.userId, {
+      workspaceId: session.workspaceId,
+    });
+    const result = await service.interruptTask({ operationId: session.operationId });
+    if (!result.success) {
+      throw new Error(`Failed to interrupt Telegram draft operation ${session.operationId}`);
+    }
+    await clearTelegramDraftSession(this.sessionScope, threadId, draftId);
   }
 
   override isDM(threadId: string): boolean {

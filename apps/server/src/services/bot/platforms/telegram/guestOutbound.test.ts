@@ -307,9 +307,7 @@ describe('deliverGuestCreate / deliverGuestEdit', () => {
       'complete replacement',
     );
 
-    const replacementBody = JSON.parse(
-      (fetchSpy.mock.calls[1]![1] as RequestInit).body as string,
-    );
+    const replacementBody = JSON.parse((fetchSpy.mock.calls[1]![1] as RequestInit).body as string);
     expect(replacementBody.caption).toBe('complete replacement');
     expect(replacementBody.caption).not.toContain('Response truncated');
     await expect(getTelegramGuestSession(SESSION_SCOPE, THREAD_ID)).resolves.toMatchObject({
@@ -375,7 +373,7 @@ describe('deliverGuestCreate / deliverGuestEdit', () => {
     );
   });
 
-  it('keeps non-image URL attachments as links instead of attempting inline media edits', async () => {
+  it('embeds non-image URL attachments in rich guest content', async () => {
     fetchSpy.mockResolvedValueOnce(okResponse({ inline_message_id: 'inline-file' }));
     await saveTelegramGuestSession(SESSION_SCOPE, THREAD_ID, { guestQueryId: 'gq-1' });
 
@@ -393,10 +391,18 @@ describe('deliverGuestCreate / deliverGuestEdit', () => {
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const answerBody = JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
-    expect(answerBody.result.input_message_content.message_text).toContain('Download the report');
-    expect(answerBody.result.input_message_content.message_text).toContain(
-      '<a href="https://app.example/f/file-id">report.pdf</a>',
-    );
+    expect(answerBody.result.input_message_content.rich_message).toEqual({
+      markdown: 'Download the report\n\n![](tg://document?id=media_0 "report.pdf")',
+      media: [
+        {
+          id: 'media_0',
+          media: {
+            media: 'https://app.example/f/file-id',
+            type: 'document',
+          },
+        },
+      ],
+    });
   });
 
   it('represents every attachment in the single guest reply', async () => {

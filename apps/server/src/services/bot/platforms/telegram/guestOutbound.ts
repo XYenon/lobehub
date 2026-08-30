@@ -5,18 +5,27 @@ import type { BotReplyLocale } from '../const';
 import type { BotMessageAttachment, MessengerContent } from '../types';
 import { messengerContentText } from '../types';
 import type { TelegramApi } from './api';
+import { canFallbackFromTelegramRichMessage } from './api';
 import {
   getTelegramGuestSession,
   saveTelegramGuestSession,
   type TelegramGuestSession,
 } from './guestSession';
-import { markdownToTelegramHTML } from './markdownToHTML';
+import { prepareTelegramRichMessage } from './richMessage';
 import { decodeGuestInlineMessageId, encodeGuestInlineMessageId } from './threadId';
 
 const log = debug('lobe-server:bot:telegram-guest-outbound');
 
 const TELEGRAM_CAPTION_LIMIT = 1024;
 const TELEGRAM_TEXT_LIMIT = 4096;
+const RICH_MARKDOWN_PATTERN = /^#{1,6}\s|^\|.+\||```|\$\$|^- \[[ x]\]|\*\*/im;
+
+const shouldUseGuestRichMessage = (
+  text: string,
+  attachments: BotMessageAttachment[] | undefined,
+): boolean =>
+  RICH_MARKDOWN_PATTERN.test(text) ||
+  attachments?.some((attachment) => attachment.type !== 'image' && attachment.fetchUrl) === true;
 
 const escapeTelegramHTML = (value: string): string =>
   value
@@ -221,6 +230,27 @@ const answerGuestQuery = async (
   text: string,
   attachments: BotMessageAttachment[] | undefined,
 ): Promise<{ id: string }> => {
+  if (shouldUseGuestRichMessage(text, attachments))
+    try {
+      const rich = await prepareTelegramRichMessage(text, attachments, { allowUploads: false });
+      if (rich.richMessage.markdown.trim()) {
+        const { inline_message_id: inlineMessageId } = await api.answerGuestRichArticle(
+          session.guestQueryId,
+          rich.richMessage,
+        );
+        await saveTelegramGuestSession(sessionScope, threadId, {
+          ...session,
+          inlineMessageId,
+          lastText: text,
+          truncated: false,
+        });
+        return { id: encodeGuestInlineMessageId(inlineMessageId) };
+      }
+    } catch (error) {
+      if (!canFallbackFromTelegramRichMessage(error)) throw error;
+      log('answerGuestQuery rich content unavailable, falling back: %O', error);
+    }
+
   const fallbackPrepared = prepareGuestText(text, {
     attachments,
     limit: guestBodyLimit(session.mediaType),
@@ -269,6 +299,28 @@ const editExistingGuest = async (
   }
   const retainTruncationNotice = !options.replaceText && session.truncated;
   const retainedTailLength = session.truncated ? appendedTextLength : 0;
+  if (shouldUseGuestRichMessage(nextText, attachments))
+    try {
+      const rich = await prepareTelegramRichMessage(nextText, attachments, { allowUploads: false });
+      if (rich.richMessage.markdown.trim()) {
+        await api.editRichMessageText({
+          inlineMessageId,
+          richMessage: rich.richMessage,
+        });
+        await saveTelegramGuestSession(sessionScope, threadId, {
+          ...session,
+          inlineMessageId,
+          lastText: nextText,
+          mediaType: undefined,
+          truncated: false,
+        });
+        return { id: encodeGuestInlineMessageId(inlineMessageId) };
+      }
+    } catch (error) {
+      if (!canFallbackFromTelegramRichMessage(error)) throw error;
+      log('editGuestMessage rich content unavailable, falling back: %O', error);
+    }
+
   const fallbackPrepared = prepareGuestText(nextText, {
     attachments,
     limit: guestBodyLimit(session.mediaType),
@@ -302,13 +354,12 @@ const editExistingGuest = async (
 };
 
 /**
- * Convert a Chat SDK postable payload into the HTML + attachment shape
- * Guest Mode outbound expects. Callbacks already HTML-format via
- * `formatMarkdown`; local `thread.post({ markdown })` still needs conversion.
+ * Convert a Chat SDK postable payload into the raw Markdown + attachment
+ * shape used by Rich Message delivery and the legacy Guest fallback.
  */
 export const messengerContentFromPostable = (message: unknown): MessengerContent => {
   if (typeof message === 'string') {
-    return markdownToTelegramHTML(message);
+    return message;
   }
   if (!message || typeof message !== 'object') return '';
   const record = message as {
@@ -324,7 +375,7 @@ export const messengerContentFromPostable = (message: unknown): MessengerContent
     text?: string;
   };
   const rawText = record.markdown ?? record.text ?? '';
-  const content = record.markdown ? markdownToTelegramHTML(rawText) : rawText;
+  const content = rawText;
   const attachments = record.attachments?.flatMap((att) => {
     if (!att.type) return [];
     return [
